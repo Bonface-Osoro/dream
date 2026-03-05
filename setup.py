@@ -17,15 +17,15 @@ def readme():
 
 
 setup(
-    name = 'maps',
+    name = 'dream',
     use_scm_version = True,
     license='MIT License',
-    description='Measuring Access to Pharmacy Services (maps)',
+    description='Digital Resilience Ecosystem for Adaptive Malaria Control(dream)',
     long_description = readme(),
     long_description_content_type = "text/markdown",
     author = 'Bonface Osoro',
     author_email = 'bonfaceosoro@gmail.com',
-    url = 'https://github.com/Bonface-Osoro/maps.git',
+    url = 'https://github.com/Bonface-Osoro/dream',
     packages = find_packages('src'),
     package_dir = {'': 'src'},
     py_modules = [splitext(basename(path))[0] for path in glob('src/*.py')],
@@ -39,10 +39,10 @@ setup(
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',
         'Topic :: Scientific/Healthcare :: Geospatial data science',
-        'Topic :: Utilities',
+        'Topic :: Malaria',
     ],
     keywords=[
-        'Avondale','pharmacy', 'patient', 'outcomes', 'access'
+        'malaria', 'Uganda', 'transmission', 'mosquito'
     ],
     setup_requires=[
         'setuptools_scm'
