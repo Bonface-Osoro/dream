@@ -39,3 +39,5 @@ We would like to thank the Geography and GIS Department and **Digital futures** 
 [1]	“Open Spatial Demographic Data and Research,” WorldPop. https://www.worldpop.org/ (accessed September 18, 2025).
 
 [2]	GADM, “Global Administrative Areas Boundaries.” https://gadm.org/download_world.html (accessed September 18, 2025).
+
+[3] Malaria Atlas Project (MAP). (2025). Malaria Data. Retrieved from https://data.malariaatlas.org/maps (accessed March 27, 2026).
