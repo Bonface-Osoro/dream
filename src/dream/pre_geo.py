@@ -24,6 +24,8 @@ def shp_to_csv(data_type, in_folder, output_folder):
 
     Parameters
     ----------
+    data_type : str
+        The type of data to be processed (e.g., 'incidence_rate', 'parasite_rate', 'net_use', 'net_access', 'mortality_rate').
     input_folder : str
         Path to the folder containing the shapefiles.
     output_folder : str
@@ -65,4 +67,69 @@ def shp_to_csv(data_type, in_folder, output_folder):
             
             print(f'{file} converted to {csv_name}')
  
+    return None
+
+
+def combine_csvs(input_folder, output_file):
+    """
+    This function combines multiple CSV files into a single CSV file.
+
+    Parameters
+    ----------
+    input_folder : str
+        Path to the folder containing the CSV files to be combined.
+    output_file : str
+        Path to the output CSV file where the combined data will be saved.
+
+    """
+    csv_files = [f for f in os.listdir(input_folder) if f.endswith('.csv')]
+    combined_df = pd.DataFrame()
+
+    for csv_file in csv_files:
+        csv_path = os.path.join(input_folder, csv_file)
+        df = pd.read_csv(csv_path)
+        combined_df = pd.concat([combined_df, df], ignore_index=True)
+
+    combined_df.to_csv(output_file, index=False)
+    print(f'Combined {len(csv_files)} CSV files into {output_file}')
+
+
+def select_valid_years(data_type, input_folder, output_folder):
+    """This function selects only the coordinates with complete 
+    time series across all years for each metric.
+    
+    Parameters
+    ----------
+    data_type : str
+        The type of data to be processed (e.g., 'incidence_rate', 
+        'parasite_rate', 'net_use', 'net_access', 'mortality_rate').
+    input_folder : str
+        Path to the folder containing the combined CSV file for the specified data type.
+    output_folder : str
+        Path to the folder where the filtered CSV file with complete time series will be saved.
+
+    """
+    csv_1 = os.path.join(input_folder, f'{data_type}_combined.csv')
+    df = pd.read_csv(csv_1)
+
+    total_years = df['year'].nunique()
+
+    coord_counts = (df.groupby(['longitude', 'latitude'])
+        ['year'].nunique().reset_index(name = 'year_count'))
+
+    valid_coords = coord_counts[coord_counts['year_count'] == total_years]
+
+    filtered_df = df.merge(valid_coords[['longitude', 'latitude']],
+                        on = ['longitude', 'latitude'],
+                        how = 'inner')
+
+    metric_name = filtered_df['metric'].iloc[0]
+    csv_name = f'{metric_name}.csv'
+    out_folder = os.path.join(output_folder, 'malaria_indices')
+    os.makedirs(out_folder, exist_ok = True)
+    path_out = os.path.join(out_folder, csv_name)
+    filtered_df.to_csv(path_out, index=False)
+
+    print("Done! Only complete coordinate time series retained.")
+
     return None
