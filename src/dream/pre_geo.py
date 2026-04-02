@@ -133,3 +133,84 @@ def select_valid_years(data_type, input_folder, output_folder):
     print("Done! Only complete coordinate time series retained.")
 
     return None
+
+
+def combine_year_files(input_folder, output_folder):
+    """
+    This function combines multiple csv files 
+    containing malaria indices of same location 
+    and year into a single csv file.
+
+    Parameters
+    ----------
+    input_folder : str
+        Path to folder containing CSV files.
+    output_folder : str
+        Path to folder where combined CSV will be saved.
+
+    """
+
+    # Get all CSV files
+    csv_files = [os.path.join(input_folder, f)
+        for f in os.listdir(input_folder)
+        if f.endswith('.csv')]
+
+    if not csv_files:
+        print('No CSV files found in the input folder.')
+        return None
+
+    # Read and combine
+    df_list = []
+    for file in csv_files:
+
+        try:
+
+            df = pd.read_csv(file)
+            df_list.append(df)
+
+        except Exception as e:
+
+            print(f'Skipping {file} due to error: {e}')
+
+    if not df_list:
+
+        print('No valid CSV files to combine.')
+        return None
+
+    combined_df = pd.concat(df_list, ignore_index = True)
+
+    os.makedirs(output_folder, exist_ok = True)
+    output_path = os.path.join(output_folder, 
+                               'spatio_temporal_malaria_indices.csv')
+    combined_df.to_csv(output_path, index = False)
+
+    print(f'\nDone! Combined CSV saved to:\n{output_path}')
+
+    return combined_df
+
+
+    import pandas as pd
+
+
+def normalize_column(df, column_name):
+    """
+    Normalizes a column in a DataFrame to values between 0 and 1.
+
+    Parameters:
+        df (pd.DataFrame): Input DataFrame
+        column_name (str): Name of the column to normalize
+
+    Returns:
+        pd.Series: Normalized column
+    """
+    col = df[column_name]
+    
+    min_val = col.min()
+    max_val = col.max()
+    
+    # Handle edge case where all values are the same
+    if min_val == max_val:
+        return pd.Series([0.0] * len(col), index=col.index)
+    
+    normalized = (col - min_val) / (max_val - min_val)
+    return normalized

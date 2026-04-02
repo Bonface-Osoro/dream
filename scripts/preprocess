@@ -2,7 +2,7 @@ import configparser
 import os
 import warnings
 import pandas as pd
-from dream.pre_geo import shp_to_csv, combine_csvs,select_valid_years, select_coordinates_with_all_metrics_single_csv
+from dream.pre_geo import (shp_to_csv, combine_csvs,select_valid_years, combine_year_files, normalize_column)
 
 pd.options.mode.chained_assignment = None
 warnings.filterwarnings('ignore')
@@ -26,26 +26,37 @@ if __name__ == '__main__':
     #shp_to_csv('mortality_rate', in_folder, out_folder)
 
     #Combine csvs for each metric into one file
-    '''combine_csvs(os.path.join(out_folder, 'incidence_rate'), os.path.join(out_folder, 'incidence_rate_combined.csv'))
-    combine_csvs(os.path.join(out_folder, 'parasite_rate'), os.path.join(out_folder, 'parasite_rate_combined.csv'))
-    combine_csvs(os.path.join(out_folder, 'net_use'), os.path.join(out_folder, 'net_use_combined.csv'))
-    combine_csvs(os.path.join(out_folder, 'net_access'), os.path.join(out_folder, 'net_access_combined.csv'))
-    combine_csvs(os.path.join(out_folder, 'mortality_rate'), os.path.join(out_folder, 'mortality_rate_combined.csv'))'''
+    combined_folder = os.path.join(DATA_PROCESSED, 'combined_data')
+    os.makedirs(combined_folder, exist_ok = True)
+    '''incidence_folder = os.path.join(out_folder, 'incidence_rate')
+    parasite_folder = os.path.join(out_folder, 'parasite_rate')
+    net_use_folder = os.path.join(out_folder, 'net_use')
+    net_access_folder = os.path.join(out_folder, 'net_access')  
+    mortality_folder = os.path.join(out_folder, 'mortality_rate')
+
+    combine_csvs(incidence_folder, os.path.join(combined_folder, 'incidence_rate_combined.csv'))
+    combine_csvs(parasite_folder, os.path.join(combined_folder, 'parasite_rate_combined.csv'))
+    combine_csvs(net_use_folder, os.path.join(combined_folder, 'net_use_combined.csv'))
+    combine_csvs(net_access_folder, os.path.join(combined_folder, 'net_access_combined.csv'))
+    combine_csvs(mortality_folder, os.path.join(combined_folder, 'mortality_rate_combined.csv'))
 
     #Select valid years for each metric
-    final_folder = os.path.join(DATA_RESULTS)
-    '''select_valid_years('incidence_rate', out_folder, final_folder)
-    select_valid_years('parasite_rate', out_folder, final_folder)
-    select_valid_years('net_use', out_folder, final_folder)
-    select_valid_years('net_access', out_folder, final_folder)
-    select_valid_years('mortality_rate', out_folder, final_folder)'''
-    
-    indices_folder = os.path.join(final_folder, 'malaria_indices') 
-    combined_folder = os.path.join(DATA_RESULTS, 'combined_data.csv')
-    os.makedirs(indices_folder, exist_ok = True)
-    #combine_csvs(indices_folder, combined_folder) 
+    final_folder = os.path.join(DATA_PROCESSED)
+    select_valid_years('incidence_rate', combined_folder, final_folder)
+    select_valid_years('parasite_rate', combined_folder, final_folder)
+    select_valid_years('net_use', combined_folder, final_folder)
+    select_valid_years('net_access', combined_folder, final_folder)
+    select_valid_years('mortality_rate', combined_folder, final_folder)'''
 
-    input_csv = os.path.join(final_folder, 'combined_data.csv')
-    complete_folder = os.path.join(DATA_RESULTS, 'complete')
-    #combined_path = os.path.join(complete_folder, 'complete_data.csv')
-    select_coordinates_with_all_metrics_single_csv(input_csv, complete_folder)
+    input_years_folder = os.path.join(DATA_RESULTS, 'complete')
+    output_years_folder = os.path.join(DATA_RESULTS, 'spatial_temporal_data') 
+    #combine_year_files(input_years_folder, output_years_folder)
+
+    df = pd.read_csv(os.path.join(output_years_folder, 'spatio_temporal_malaria_indices.csv'))
+    df['normalized_parasite_rate'] = normalize_column(df, 'parasite_rate')
+    df['normalized_incidence_rate'] = normalize_column(df, 'incidence_rate')
+    df['normalized_net_use'] = normalize_column(df, 'net_use')
+    df['normalized_net_access'] = normalize_column(df, 'net_access')
+    df['normalized_mortality_rate'] = normalize_column(df, 'mortality_rate')
+    df.to_csv(os.path.join(output_years_folder, 'spatio_temporal_malaria_indices_normalized.csv'), index = False)
+

@@ -30,7 +30,7 @@ Results
 
 ## Background and funding
 
-**lung** has been developed by researchers at the Digital Epidemiology (**De**)
+**dream** has been developed by researchers at the Digital Epidemiology (**De**)
 laboratory of the **Digital futures** at University of Cincinnati. 
 
 We would like to thank the Geography and GIS Department and **Digital futures** for providing the funding for the project. 
