@@ -9,6 +9,7 @@ import pandas as pd
 import torch.nn as nn
 from dream.malmo import create_sequences
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from torch.utils.data import TensorDataset, DataLoader
 
 pd.options.mode.chained_assignment = None
@@ -156,18 +157,39 @@ model.load_state_dict(torch.load(best_model_path))
 model.eval()
 
 y_pred_list = []
+y_true_list = []
+
 with torch.no_grad():
 
-    for X_batch, _ in test_loader:
+    for X_batch, y_batch in test_loader:
 
         y_pred = model(X_batch)
         y_pred_list.append(y_pred.cpu().numpy())
+        y_true_list.append(y_batch.cpu().numpy())
 
 y_pred = np.concatenate(y_pred_list)
+y_true = np.concatenate(y_true_list)
+
+mse = mean_squared_error(y_true, y_pred)
+mae = mean_absolute_error(y_true, y_pred)
+r2 = r2_score(y_true, y_pred)
+
+metrics_dict = {'MSE': mse, 'MAE': mae, 'R2': r2}
+metrics_csv_path = os.path.join(model_path, 'test_metrics.csv') 
+
+with open(metrics_csv_path, mode = 'w', newline = '') as f:
+
+    writer = csv.writer(f)
+    writer.writerow(['Metric', 'Value'])
+    for metric, value in metrics_dict.items():
+        
+        writer.writerow([metric, value])
 
 pred_by_loc = {}
-for (lon, lat), pred, true in zip(locations_test, y_pred, y_test.cpu().numpy()):
+for (lon, lat), pred, true in zip(locations_test, y_pred, y_true):
+
     if (lon, lat) not in pred_by_loc:
+        
         pred_by_loc[(lon, lat)] = {'true': [], 'pred': []}
     pred_by_loc[(lon, lat)]['true'].append(true[0])
     pred_by_loc[(lon, lat)]['pred'].append(pred[0])

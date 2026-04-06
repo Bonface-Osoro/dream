@@ -51,12 +51,5 @@ if __name__ == '__main__':
     input_years_folder = os.path.join(DATA_RESULTS, 'complete')
     output_years_folder = os.path.join(DATA_RESULTS, 'spatial_temporal_data') 
     #combine_year_files(input_years_folder, output_years_folder)
-
-    df = pd.read_csv(os.path.join(output_years_folder, 'spatio_temporal_malaria_indices.csv'))
-    df['normalized_parasite_rate'] = normalize_column(df, 'parasite_rate')
-    df['normalized_incidence_rate'] = normalize_column(df, 'incidence_rate')
-    df['normalized_net_use'] = normalize_column(df, 'net_use')
-    df['normalized_net_access'] = normalize_column(df, 'net_access')
-    df['normalized_mortality_rate'] = normalize_column(df, 'mortality_rate')
-    df.to_csv(os.path.join(output_years_folder, 'spatio_temporal_malaria_indices_normalized.csv'), index = False)
-
+    ndvi_folder = os.path.join(DATA_RAW, 'ndvi')
+    combine_csvs(ndvi_folder, os.path.join(combined_folder, 'ndvi_combined.csv'))

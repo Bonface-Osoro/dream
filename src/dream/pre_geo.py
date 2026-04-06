@@ -214,3 +214,68 @@ def normalize_column(df, column_name):
     
     normalized = (col - min_val) / (max_val - min_val)
     return normalized
+
+
+def combine_predictors(file1_path, file2_path, save_path):
+    ''''
+    This is afunction for merging csv files 
+    containing predictors using ['latitude', 
+    'longitude', 'year'] as keys.
+
+    Parameters
+    ----------
+
+        file1_path : str
+            Path to the first CSV file
+        file2_path : str
+            Path to the second CSV file
+        save_path : str
+            Path where the merged CSV file will be saved
+
+    Returns
+    -------
+        pd.DataFrame: Merged DataFrame
+    '''
+
+    df1 = pd.read_csv(file1_path)
+    df2 = pd.read_csv(file2_path)
+
+    df1.columns = df1.columns.str.strip()
+    df2.columns = df2.columns.str.strip()
+
+    required_cols = ['latitude', 'longitude', 'year']
+
+    # Check required columns exist
+    for col in required_cols:
+
+        if col not in df1.columns:
+            
+            raise ValueError(f"Column '{col}' not found in first file")
+        if col not in df2.columns:
+
+            raise ValueError(f"Column '{col}' not found in second file")
+
+    # Standardize merge columns
+    for df in [df1, df2]:
+
+        df['year'] = df['year'].astype(int)
+        df['longitude'] = df['longitude'].astype(float).round(8)
+        df['latitude'] = df['latitude'].astype(float).round(8)
+
+    # Drop duplicate keys to avoid row explosion
+    df1 = df1.drop_duplicates(subset = required_cols)
+    df2 = df2.drop_duplicates(subset = required_cols)
+
+    merged_df = pd.merge(df1, df2, on = required_cols,
+        how = 'left', validate = 'one_to_one')
+    
+    filename1 = os.path.basename(file1_path)
+    filename2 = os.path.basename(file2_path)
+   
+    filename = f'merged_{os.path.splitext(filename1)[0]}_{os.path.splitext(filename2)[0]}.csv'
+    save_path = os.path.join(os.path.dirname(save_path), 'all', filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok = True)
+    merged_df.to_csv(save_path, index = False)
+
+
+    return merged_df
