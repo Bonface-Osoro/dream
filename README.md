@@ -41,3 +41,7 @@ We would like to thank the Geography and GIS Department and **Digital futures** 
 [2]	GADM, “Global Administrative Areas Boundaries.” https://gadm.org/download_world.html (accessed September 18, 2025).
 
 [3] Malaria Atlas Project (MAP). (2025). Malaria Data. Retrieved from https://data.malariaatlas.org/maps (accessed March 27, 2026).
+
+[4] Pinzon, J. E., Pak, E. W., Tucker, C. J., Bhatt, U. S., Frost, G. V., & Macander, M. J. (2023). Global Vegetation Greenness (NDVI) from AVHRR GIMMS-3G+, 1981-2022 (Version 1). ORNL Distributed Active Archive Center. https://doi.org/10.3334/ORNLDAAC/2187 Date Accessed: 2026-04-02 
+
+[5] Funk, C., Peterson, P., Landsfeld, M. et al. The climate hazards infrared precipitation with stations—a new environmental record for monitoring extremes. Sci Data 2, 150066 (2015). https://doi.org/10.1038/sdata.2015.66
