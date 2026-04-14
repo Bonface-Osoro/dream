@@ -7,11 +7,13 @@ March 2026
 
 """
 import os
+import glob
 import re
 import warnings
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 pd.options.mode.chained_assignment = None
 warnings.filterwarnings('ignore')
@@ -216,7 +218,7 @@ def normalize_column(df, column_name):
     return normalized
 
 
-def combine_predictors(file1_path, file2_path, save_path):
+def eco_mri(annual_csv_path, monthly_csv_path, output_csv_path):
     ''''
     This is afunction for merging csv files 
     containing predictors using ['latitude', 
@@ -225,11 +227,11 @@ def combine_predictors(file1_path, file2_path, save_path):
     Parameters
     ----------
 
-        file1_path : str
-            Path to the first CSV file
-        file2_path : str
-            Path to the second CSV file
-        save_path : str
+        annual_csv_path : str
+            Path to annual MRI CSV file
+        monthly_csv_path : str
+            Path to monthly predictors CSV file
+        output_csv_path : str
             Path where the merged CSV file will be saved
 
     Returns
@@ -237,45 +239,208 @@ def combine_predictors(file1_path, file2_path, save_path):
         pd.DataFrame: Merged DataFrame
     '''
 
-    df1 = pd.read_csv(file1_path)
-    df2 = pd.read_csv(file2_path)
+    annual_df = pd.read_csv(annual_csv_path)
+    monthly_df = pd.read_csv(monthly_csv_path)
 
-    df1.columns = df1.columns.str.strip()
-    df2.columns = df2.columns.str.strip()
+    if 'mri_value' not in annual_df.columns:
+        
+        raise ValueError("annual CSV must contain 'mri_value' column")
 
-    required_cols = ['latitude', 'longitude', 'year']
+    annual_df = annual_df[['year', 'longitude', 'latitude', 'mri_value']]
 
-    # Check required columns exist
-    for col in required_cols:
+    annual_df['year'] = annual_df['year'].astype(int)
+    monthly_df['year'] = monthly_df['year'].astype(int)
 
-        if col not in df1.columns:
-            
-            raise ValueError(f"Column '{col}' not found in first file")
-        if col not in df2.columns:
+    for col in ['longitude', 'latitude']:
 
-            raise ValueError(f"Column '{col}' not found in second file")
+        annual_df[col] = annual_df[col].round(5)
+        monthly_df[col] = monthly_df[col].round(5)
 
-    # Standardize merge columns
-    for df in [df1, df2]:
+    merged_df = pd.merge(monthly_df, annual_df,
+        on = ['year', 'longitude', 'latitude'],
+        how = 'left')
 
-        df['year'] = df['year'].astype(int)
-        df['longitude'] = df['longitude'].astype(float).round(8)
-        df['latitude'] = df['latitude'].astype(float).round(8)
+    missing = merged_df['mri_value'].isna().sum()
+    if missing > 0:
 
-    # Drop duplicate keys to avoid row explosion
-    df1 = df1.drop_duplicates(subset = required_cols)
-    df2 = df2.drop_duplicates(subset = required_cols)
+        print(f"Warning: {missing} rows did not match and have missing MRI values.")
 
-    merged_df = pd.merge(df1, df2, on = required_cols,
-        how = 'left', validate = 'one_to_one')
+    merged_df.to_csv(output_csv_path, index = False)
+
+    print(f"Merge complete. File saved to: {output_csv_path}")
+
+    return merged_df
+
+
+def combine_ndvi_monthly(input_folder, output_folder):
+    """
+    This function combines multiple monthly NDVI CSV 
+    files into a single CSV file.
+
+    Parameters
+    ----------
+    input_folder : str
+        Path to the folder containing the monthly NDVI CSV files to be combined.
+    output_file : str
+        Path to the output CSV file where the combined data will be saved.
+
+    """
+    files = glob.glob(os.path.join(input_folder, '*.xlsx'))
     
-    filename1 = os.path.basename(file1_path)
-    filename2 = os.path.basename(file2_path)
-   
-    filename = f'merged_{os.path.splitext(filename1)[0]}_{os.path.splitext(filename2)[0]}.csv'
-    save_path = os.path.join(os.path.dirname(save_path), 'all', filename)
-    os.makedirs(os.path.dirname(save_path), exist_ok = True)
-    merged_df.to_csv(save_path, index = False)
+    all_dfs = []
 
+    for file in tqdm(files, desc = 'Combining monthly NDVI files', 
+                     unit = 'file'):
+
+        df = pd.read_excel(file)
+        
+        filename = os.path.basename(file)
+        month = filename.split("_")[-1].split(".")[0].lower()
+        
+        df = df.drop(columns=['OBJECTID', 'rainfall', 'normalized_rain'], 
+                     errors = 'ignore')
+        
+        df = df.rename(columns = {'RASTERVALU': 'ndvi'})
+        df['month'] = month
+        df = df.drop_duplicates(subset = ['year', 'longitude', 'latitude'])
+        
+        all_dfs.append(df)
+
+    final_df = pd.concat(all_dfs, ignore_index=True)
+    final_df = final_df.sort_values(by = ['year', 'longitude', 'latitude', 'month'])
+    os.makedirs(output_folder, exist_ok = True)
+
+    output_path = os.path.join(output_folder, 'combined_monthly_ndvi.csv')
+    final_df.to_csv(output_path, index = False)
+
+
+    return None
+
+
+def combine_rain_monthly(input_folder, output_folder):
+    """
+    This function combines multiple monthly rain CSV 
+    files into a single CSV file.
+
+    Parameters
+    ----------
+    input_folder : str
+        Path to the folder containing the monthly rain CSV files to be combined.
+    output_file : str
+        Path to the output CSV file where the combined data will be saved.
+
+    """
+    files = glob.glob(os.path.join(input_folder, '*.xlsx'))
+    
+    all_dfs = []
+
+    for file in tqdm(files, desc = 'Combining monthly precipitation files', 
+                     unit = 'file'):
+
+        df = pd.read_excel(file)
+        
+        filename = os.path.basename(file)
+        month = filename.split("_")[-1].split(".")[0].lower()
+        
+        df = df.drop(columns=['OBJECTID', 'rainfall', 'normalized_rain'], 
+                     errors = 'ignore')
+        
+        df = df.rename(columns = {'RASTERVALU': 'precipitation_mm'})
+        df['month'] = month
+        df = df.drop_duplicates(subset = ['year', 'longitude', 'latitude'])
+        
+        all_dfs.append(df)
+
+    final_df = pd.concat(all_dfs, ignore_index=True)
+    final_df = final_df.sort_values(by = ['year', 'longitude', 'latitude', 'month'])
+    os.makedirs(output_folder, exist_ok = True)
+
+    output_path = os.path.join(output_folder, 'combined_monthly_rain.csv')
+    final_df.to_csv(output_path, index = False)
+
+
+    return None
+
+
+def combine_monthly_temp(input_folder, output_folder):
+    """
+    This function combines multiple monthly temperature CSV 
+    files into a single CSV file.
+
+    Parameters
+    ----------
+    input_folder : str
+        Path to the folder containing the monthly temperature CSV files to be combined.
+    output_file : str
+        Path to the output CSV file where the combined data will be saved.
+
+    """
+    files = glob.glob(os.path.join(input_folder, '*.xlsx'))
+    
+    all_dfs = []
+
+    for file in tqdm(files, desc = 'Combining monthly temperature files', 
+                     unit = 'file'):
+
+        df = pd.read_excel(file)
+        
+        filename = os.path.basename(file)
+        month = filename.split("_")[-1].split(".")[0].lower()
+        
+        df = df.drop(columns=['OBJECTID', 'rainfall', 'normalized_rain'], 
+                     errors = 'ignore')
+        
+        df = df.rename(columns = {'RASTERVALU': 'temperature_C'})
+        df['temperature_C'] = df['temperature_C'] - 273.15
+        df['month'] = month
+        df = df.drop_duplicates(subset = ['year', 'longitude', 'latitude'])
+        
+        all_dfs.append(df)
+
+    final_df = pd.concat(all_dfs, ignore_index=True)
+    final_df = final_df.sort_values(by = ['year', 'longitude', 'latitude', 'month'])
+    os.makedirs(output_folder, exist_ok = True)
+
+    output_path = os.path.join(output_folder, 'combined_monthly_temperature.csv')
+    final_df.to_csv(output_path, index = False)
+
+
+    return None
+
+
+def merge_eco_datasets(ndvi_path, elev_path, precip_path, temp_path, output_path):
+    """This function merges multiple climate datasets (NDVI, elevation, 
+    precipitation, temperature)
+    
+    Parameters
+    ----------
+    ndvi_path : str
+        Path to the NDVI CSV file.
+    elev_path : str
+        Path to the elevation CSV file.
+    precip_path : str
+        Path to the precipitation CSV file.
+    temp_path : str
+        Path to the temperature CSV file.
+    output_path : str
+        Path to the output CSV file where the merged data will be saved.
+    """
+
+    ndvi_df = pd.read_csv(ndvi_path)
+    elev_df = pd.read_csv(elev_path)
+    precip_df = pd.read_csv(precip_path)
+    temp_df = pd.read_csv(temp_path)
+
+    keys = ['year', 'longitude', 'latitude', 'month']
+
+    merged_df = ndvi_df.merge(elev_df, on = keys, how = 'inner')
+    merged_df = merged_df.merge(precip_df, on = keys, how = 'inner')
+    merged_df = merged_df.merge(temp_df, on = keys, how = 'inner')
+
+    merged_df = merged_df.sort_values(by = keys)
+
+    merged_df.to_csv(output_path, index=False)
+
+    print(f"✅ Merged dataset saved to: {output_path}")
 
     return merged_df
