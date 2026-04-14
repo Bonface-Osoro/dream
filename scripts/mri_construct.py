@@ -3,7 +3,7 @@ import os
 import warnings
 import pandas as pd
 from dream.pre_geo import (normalize_column)
-from dream.malmo import pca_weights, compute_mri
+from dream.malmo import pca_weights, compute_mri, estimate_monthly_mri
 
 
 pd.options.mode.chained_assignment = None
@@ -33,9 +33,16 @@ cols = ['normalized_parasite_rate', 'normalized_incidence_rate',
         'normalized_net_use', 'normalized_net_access',
         'normalized_mortality_rate']
 
-weights = pca_weights(df, cols)
+'''weights = pca_weights(df, cols)
 
 df['mri_value'] = compute_mri(df, weights)
 output_path = os.path.join(DATA_RESULTS, 'mri', 'malaria_risk_index.csv')
 os.makedirs(os.path.dirname(output_path), exist_ok = True)
-df.to_csv(output_path, index = False)
+df.to_csv(output_path, index = False)'''
+
+input_mri_file = os.path.join(DATA_RESULTS, 'mri', 'ecological_predictors_with_mri.csv')
+monthly_mri_output = os.path.join(DATA_RESULTS, 'mri', 'malaria_risk_index_monthly.csv')
+
+if __name__ == "__main__":
+    
+        estimate_monthly_mri(input_mri_file, monthly_mri_output) 

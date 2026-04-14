@@ -42,6 +42,10 @@ We would like to thank the Geography and GIS Department and **Digital futures** 
 
 [3] Malaria Atlas Project (MAP). (2025). Malaria Data. Retrieved from https://data.malariaatlas.org/maps (accessed March 27, 2026).
 
-[4] Pinzon, J. E., Pak, E. W., Tucker, C. J., Bhatt, U. S., Frost, G. V., & Macander, M. J. (2023). Global Vegetation Greenness (NDVI) from AVHRR GIMMS-3G+, 1981-2022 (Version 1). ORNL Distributed Active Archive Center. https://doi.org/10.3334/ORNLDAAC/2187 Date Accessed: 2026-04-02 
+[4] Pinzon, J. E., Pak, E. W., Tucker, C. J., Bhatt, U. S., Frost, G. V., & Macander, M. J. (2023). Global Vegetation Greenness (NDVI) from AVHRR GIMMS-3G+, 1981-2022 (Version 1). ORNL Distributed Active Archive Center. https://doi.org/10.3334/ORNLDAAC/2187 Date Accessed: 2026-04-02 (Download link: https://www.earthdata.nasa.gov/data/catalog/ornl-cloud-global-veg-greenness-gimms-3g-2187-1)
 
-[5] Funk, C., Peterson, P., Landsfeld, M. et al. The climate hazards infrared precipitation with stations—a new environmental record for monitoring extremes. Sci Data 2, 150066 (2015). https://doi.org/10.1038/sdata.2015.66
+[5] Funk, C., Peterson, P., Landsfeld, M. et al. The climate hazards infrared precipitation with stations—a new environmental record for monitoring extremes. Sci Data 2, 150066 (2015). https://doi.org/10.1038/sdata.2015.66 (download link: https://data.chc.ucsb.edu/products/CHIRPS-2.0/)
+
+[6] Hersbach, H., Bell, B., Berrisford, P., Biavati, G., Horányi, A., Muñoz Sabater, J., Nicolas, J., Peubey, C., Radu, R., Rozum, I., Schepers, D., Simmons, A., Soci, C., Dee, D., Thépaut, J-N. (2023): ERA5 monthly averaged data on single levels from 1940 to present. Copernicus Climate Change Service (C3S) Climate Data Store (CDS), DOI: 10.24381/cds.f17050d7 (Accessed on 08-Apr-2026) (Download link: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-monthly-means?tab=overview)
+
+[7] NASA JPL (2021). NASADEM Merged DEM Global 1 arc second V001. Distributed by OpenTopography. https://doi.org/10.5069/G93T9FD9. Accessed 2026-04-13 (Download link: https://portal.opentopography.org/rasterOutput?jobId=rt1776082869769)
