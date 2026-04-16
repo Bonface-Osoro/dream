@@ -11,8 +11,8 @@ import warnings
 import numpy as np
 import pandas as pd
 import pymc as pm
-from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
 pd.options.mode.chained_assignment = None
@@ -237,44 +237,3 @@ def estimate_monthly_mri(input_csv, output_csv_path):
     df_out.to_csv(output_csv_path, index=False)
 
     return None
-
-
-def create_sequences(df, features, target, look_back):
-    """
-    This function creates sequences of features and targets for time series modeling.
-
-    Parameters:
-    ----------
-
-        df : dataframe
-            Input dataframe with columns for features, target, year, longitude, latitude
-        features : list
-            List of column names to be used as features
-        target : str
-            Column name to be used as the target variable
-        look_back : int
-            Number of past years to include in each sequence
-
-    Returns:
-    -------    
-        X : np.array
-            3D array of shape (num_samples, look_back, num_features)
-        y : np.array
-            1D array of target values corresponding to each sequence
-    """
-    
-    years = look_back
-    X_list, y_list, loc_list = [], [], []
-
-    for (lon, lat), group in df.groupby(['longitude', 'latitude']):
-
-        group = group.sort_values('year')
-        data_features = group[features].values
-        data_target = group[target].values
-        for i in range(len(group) - years):
-
-            X_list.append(data_features[i:i + years])
-            y_list.append(data_target[i + years])
-            loc_list.append((lon, lat))  
-            
-    return np.array(X_list), np.array(y_list), loc_list
