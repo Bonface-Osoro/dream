@@ -487,28 +487,46 @@ def build_lstm_prediction_dict(locations, y_pred, y_true):
 
     return pred_by_loc
 
-def plot_sample_lstm_predictions(pred_by_loc, num_locations):
-    """Plots sample predictions for a few locations.
+def plot_lstm_predictions(pred_by_loc, save_dir, n, show):
+    """
+    Plots and saves prediction vs true values for first n locations.
+
     Parameters:
     ----------
-        pred_by_loc : dict
-            A dictionary mapping each location to its true and predicted values.
-        num_locations : int
-            The number of locations to plot.
-
-    Returns:
-    -------
-        None
+    pred_by_loc : dict
+        Dictionary with structure { (lon, lat): {'true': [...], 'pred': [...]} }
+    save_dir : str
+        Directory to save plots
+    n : int
+        Number of locations to plot
+    show : bool
+        Whether to display plots (default False)
     """
 
-    print(f"Plotting first {num_locations} locations...")
+    print("Saving prediction plots...")
 
-    for loc, vals in list(pred_by_loc.items())[:num_locations]:
-        plt.figure(figsize=(8,4))
+    os.makedirs(save_dir, exist_ok=True)
+
+    for i, (loc, vals) in enumerate(list(pred_by_loc.items())[:n]):
+
+        plt.figure(figsize = (8,4))
         plt.plot(vals['true'], label='True MRI')
         plt.plot(vals['pred'], label='Predicted MRI')
+
         plt.title(f'Location: {loc}')
         plt.xlabel('Time step')
-        plt.ylabel('MRI Value')
+        plt.ylabel('MRI')
         plt.legend()
-        plt.show()
+
+        lon, lat = loc
+        filename = f"lstm_predicted_loc_{i+1}_lon_{lon:.4f}_lat_{lat:.4f}.png"
+        filepath = os.path.join(save_dir, filename)
+
+        plt.savefig(filepath, bbox_inches='tight')
+        print(f"Saved: {filepath}")
+
+        if show:
+            
+            plt.show()
+
+        plt.close()
