@@ -1,5 +1,6 @@
 import os
 import csv
+import shap
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
@@ -486,6 +487,116 @@ def build_lstm_prediction_dict(locations, y_pred, y_true):
         pred_by_loc[(lon, lat)]['pred'].append(pred)
 
     return pred_by_loc
+
+
+def export_lstm_shap_values(model, X, y, feature_names, save_dir, device):
+
+    print("Exporting LSTM SHAP (per-sample approximation) to CSV...")
+
+    # ---------------------------
+    # Ensure tensor format
+    # ---------------------------
+    if isinstance(X, np.ndarray):
+        X = torch.tensor(X, dtype=torch.float32)
+
+    if isinstance(y, np.ndarray):
+        y = torch.tensor(y, dtype=torch.float32)
+
+    X = X.to(device)
+    y = y.to(device)
+
+    model.eval()
+
+    n_samples, timesteps, n_features = X.shape
+
+    # ---------------------------
+    # Baseline predictions (per sample)
+    # ---------------------------
+    with torch.no_grad():
+        baseline_preds = model(X).cpu().numpy().reshape(-1)
+
+    # ---------------------------
+    # Store SHAP-like values
+    # ---------------------------
+    shap_values = np.zeros((n_samples, n_features))
+
+    # ---------------------------
+    # Per-feature perturbation
+    # ---------------------------
+    for i in range(n_features):
+
+        X_permuted = X.clone()
+
+        # Shuffle THIS feature across samples (keeps time structure)
+        idx = torch.randperm(n_samples)
+        X_permuted[:, :, i] = X_permuted[idx, :, i]
+
+        with torch.no_grad():
+            perm_preds = model(X_permuted).cpu().numpy().reshape(-1)
+
+        # Per-sample contribution
+        shap_values[:, i] = perm_preds - baseline_preds
+
+    # ---------------------------
+    # Convert to DataFrame
+    # ---------------------------
+    shap_df = pd.DataFrame(shap_values, columns=feature_names)
+
+    # ---------------------------
+    # Add feature values (last timestep)
+    # ---------------------------
+    X_last = X[:, -1, :].cpu().numpy()
+
+    value_df = pd.DataFrame(
+        X_last,
+        columns=[f"{f}_value" for f in feature_names]
+    )
+
+    shap_df = pd.concat([shap_df, value_df], axis=1)
+
+    # ---------------------------
+    # Save CSV
+    # ---------------------------
+    csv_path = os.path.join(save_dir, "lstm_shap_values.csv")
+    shap_df.to_csv(csv_path, index=False)
+
+    print(f"Saved: {csv_path}")
+
+    return shap_df
+
+
+def plot_lstm_shap(shap_df, feature_names, save_dir):
+    """
+    Generates SHAP summary and bar plots.
+    """
+
+    print("Plotting LSTM SHAP...")
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    shap_values = shap_df[feature_names].values
+    feature_values = shap_df[[f"{f}_value" for f in feature_names]].values
+
+    # Summary plot
+    plt.figure()
+    shap.summary_plot(shap_values, feature_values,
+                      feature_names=feature_names,
+                      show=False)
+    plt.savefig(os.path.join(save_dir, "lstm_shap_summary.png"),
+                bbox_inches='tight')
+    plt.close()
+
+    # Bar plot
+    plt.figure()
+    shap.summary_plot(shap_values, feature_values,
+                      feature_names=feature_names,
+                      plot_type="bar",
+                      show=False)
+    plt.savefig(os.path.join(save_dir, "lstm_shap_bar.png"),
+                bbox_inches='tight')
+    plt.close()
+
+    print("Saved SHAP plots.")
 
 def plot_lstm_predictions(pred_by_loc, save_dir, n, show):
     """

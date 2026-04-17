@@ -50,4 +50,7 @@ lstm_metrics(mse, mae, r2, model_path)
 lstm_per_location_metrics(locations, y_true, y_pred, model_path)
 
 pred_by_loc = build_lstm_prediction_dict(locations, y_true, y_pred)
+shap_df = export_lstm_shap_values(model, X_test, y_test,
+    features, model_path, device)
+plot_lstm_shap(shap_df, features, model_path)
 plot_lstm_predictions(pred_by_loc, model_path, 3, False)
