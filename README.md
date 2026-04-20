@@ -22,10 +22,10 @@ Integrated model applied in the study(see `Figure 1`).
 
 Results
 =======
-`Figure 2` shows preliminary results.
+`Figure 2` shows the Malaria Risk Index (MRI) for Uganda from 2009 to 2020.
 #### Figure 2 Modeling Preliminary Results.
 <p align="center">
-  <img src="/docs/summary_plots.png" />
+  <img src="/docs/summary_plots.jpg" />
 </p>
 
 ## Background and funding
