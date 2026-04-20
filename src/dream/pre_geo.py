@@ -20,13 +20,15 @@ warnings.filterwarnings('ignore')
 
 def shp_to_csv(data_type, in_folder, output_folder):
     """
-    This function reads different shapefiles and convert them 
-    into csv files for further processing.
+    This function reads different shapefiles and 
+    convert them into csv files for further processing.
 
     Parameters
     ----------
     data_type : str
-        The type of data to be processed (e.g., 'incidence_rate', 'parasite_rate', 'net_use', 'net_access', 'mortality_rate').
+        The type of data to be processed (e.g., 
+        'incidence_rate', 'parasite_rate', 'net_use', 
+        'net_access', 'mortality_rate').
     input_folder : str
         Path to the folder containing the shapefiles.
     output_folder : str

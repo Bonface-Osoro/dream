@@ -3,7 +3,7 @@ import os
 import warnings
 import pandas as pd
 from dream.pre_geo import (normalize_column)
-from dream.malmo import pca_weights, compute_mri, estimate_monthly_mri
+from dream.malmo import *
 
 
 pd.options.mode.chained_assignment = None

@@ -2,7 +2,7 @@ import configparser
 import os
 import warnings
 import pandas as pd
-from dream.pre_geo import (shp_to_csv, combine_csvs,select_valid_years, combine_year_files, normalize_column)
+from dream.pre_geo import *
 
 pd.options.mode.chained_assignment = None
 warnings.filterwarnings('ignore')
@@ -14,8 +14,8 @@ BASE_PATH = CONFIG['file_locations']['base_path']
 DATA_RAW = os.path.join(BASE_PATH, 'raw')
 DATA_PROCESSED = os.path.join(BASE_PATH, '..', 'results', 'processed')
 DATA_RESULTS = os.path.join(BASE_PATH, '..', 'results', 'final')
-in_folder = os.path.join(DATA_RAW)
-out_folder = os.path.join(DATA_PROCESSED)
+in_folder = os.path.join(DATA_RAW, 'zimbabwe')
+out_folder = os.path.join(DATA_PROCESSED, 'zimbabwe')
 
 if __name__ == '__main__':
 
@@ -26,9 +26,9 @@ if __name__ == '__main__':
     #shp_to_csv('mortality_rate', in_folder, out_folder)
 
     #Combine csvs for each metric into one file
-    combined_folder = os.path.join(DATA_PROCESSED, 'combined_data')
+    '''combined_folder = os.path.join(DATA_PROCESSED, 'combined_data')
     os.makedirs(combined_folder, exist_ok = True)
-    '''incidence_folder = os.path.join(out_folder, 'incidence_rate')
+    incidence_folder = os.path.join(out_folder, 'incidence_rate')
     parasite_folder = os.path.join(out_folder, 'parasite_rate')
     net_use_folder = os.path.join(out_folder, 'net_use')
     net_access_folder = os.path.join(out_folder, 'net_access')  
@@ -46,10 +46,10 @@ if __name__ == '__main__':
     select_valid_years('parasite_rate', combined_folder, final_folder)
     select_valid_years('net_use', combined_folder, final_folder)
     select_valid_years('net_access', combined_folder, final_folder)
-    select_valid_years('mortality_rate', combined_folder, final_folder)'''
+    select_valid_years('mortality_rate', combined_folder, final_folder)
 
     input_years_folder = os.path.join(DATA_RESULTS, 'complete')
     output_years_folder = os.path.join(DATA_RESULTS, 'spatial_temporal_data') 
-    #combine_year_files(input_years_folder, output_years_folder)
-    ndvi_folder = os.path.join(DATA_RAW, 'ndvi')
-    combine_csvs(ndvi_folder, os.path.join(combined_folder, 'ndvi_combined.csv'))
+    combine_year_files(input_years_folder, output_years_folder)
+    #ndvi_folder = os.path.join(DATA_RAW, 'ndvi')
+    #combine_csvs(ndvi_folder, os.path.join(combined_folder, 'ndvi_combined.csv'))'''
