@@ -25,7 +25,7 @@ Results
 `Figure 2` shows the Malaria Risk Index (MRI) for Uganda from 2009 to 2020.
 #### Figure 2 Modeling Preliminary Results.
 <p align="center">
-  <img src="/docs/summary_plots.jpg" />
+  <img src="/docs/mri.png" />
 </p>
 
 ## Background and funding

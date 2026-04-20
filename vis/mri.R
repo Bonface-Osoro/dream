@@ -14,6 +14,18 @@ library(ggpubr)
 
 suppressMessages(library(tidyverse))
 folder <- dirname(rstudioapi::getSourceEditorContext()$path)
+
+df <- read.csv(file.path(folder, '..', 'results', 'processed', 'zimbabwe',
+                         'zimbabwe_combined.csv'))
+
+df_wide <- df %>%
+  pivot_wider(
+    names_from = metric,    
+    values_from = value     
+  )
+
+# View result
+head(df_wide)
 #####################
 ## REGRESSION MAPS ##
 #####################
@@ -48,8 +60,8 @@ annual_mri <- ggplot() +
         axis.text.y = element_text(size = 5),
         axis.line.x  = element_line(size = 0.15),
         axis.line.y  = element_line(size = 0.15),
-        legend.title = element_text(size = 8),
-        legend.text = element_text(size = 7)) 
+        legend.title = element_text(size = 6),
+        legend.text = element_text(size = 5)) 
 
 path = file.path(folder, 'figures', '2009_2020_annual_mri.png')
 png(path, units="in", width=7, height=6, res=720)
