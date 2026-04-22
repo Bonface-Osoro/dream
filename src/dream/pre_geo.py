@@ -442,6 +442,4 @@ def merge_eco_datasets(ndvi_path, elev_path, precip_path, temp_path, output_path
 
     merged_df.to_csv(output_path, index=False)
 
-    print(f"✅ Merged dataset saved to: {output_path}")
-
     return merged_df
