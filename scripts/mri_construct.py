@@ -17,7 +17,7 @@ DATA_PROCESSED = os.path.join(BASE_PATH, '..', 'results', 'processed')
 DATA_RESULTS = os.path.join(BASE_PATH, '..', 'results', 'final')
 
 
-output_years_folder = os.path.join(DATA_RESULTS, 'spatial_temporal_data')
+'''output_years_folder = os.path.join(DATA_RESULTS, 'spatial_temporal_data')
 df = pd.read_csv(os.path.join(output_years_folder, 'spatio_temporal_malaria_indices.csv'))
 df['normalized_parasite_rate'] = normalize_column(df, 'parasite_rate')
 df['normalized_incidence_rate'] = normalize_column(df, 'incidence_rate')
@@ -33,15 +33,15 @@ cols = ['normalized_parasite_rate', 'normalized_incidence_rate',
         'normalized_net_use', 'normalized_net_access',
         'normalized_mortality_rate']
 
-'''weights = pca_weights(df, cols)
+weights = pca_weights(df, cols)
 
 df['mri_value'] = compute_mri(df, weights)
 output_path = os.path.join(DATA_RESULTS, 'mri', 'malaria_risk_index.csv')
 os.makedirs(os.path.dirname(output_path), exist_ok = True)
 df.to_csv(output_path, index = False)'''
 
-input_mri_file = os.path.join(DATA_RESULTS, 'mri', 'ecological_predictors_with_mri.csv')
-monthly_mri_output = os.path.join(DATA_RESULTS, 'mri', 'malaria_risk_index_monthly.csv')
+input_mri_file = os.path.join(DATA_RESULTS, 'mri', 'ZWE_ecological_predictors_with_mri.csv')
+monthly_mri_output = os.path.join(DATA_RESULTS, 'mri', 'ZWE_malaria_risk_index_monthly.csv')
 
 if __name__ == "__main__":
     
