@@ -51,5 +51,7 @@ if __name__ == '__main__':
     input_years_folder = os.path.join(DATA_RESULTS, 'complete')
     output_years_folder = os.path.join(DATA_RESULTS, 'spatial_temporal_data') 
     combine_year_files(input_years_folder, output_years_folder)
-    #ndvi_folder = os.path.join(DATA_RAW, 'ndvi')
-    #combine_csvs(ndvi_folder, os.path.join(combined_folder, 'ndvi_combined.csv'))'''
+
+    ndvi_folder = os.path.join(DATA_RAW, 'zimbabwe', 'temperature')
+    combined_folder = os.path.join(DATA_PROCESSED, 'zimbabwe', 'combined_data')
+    combine_monthly_temp(ndvi_folder,combined_folder)'''

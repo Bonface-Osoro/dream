@@ -7,16 +7,19 @@ Developed by Bonface Osoro.
 March 2026
 
 """
+import pytensor
 import warnings
 import numpy as np
 import pandas as pd
 import pymc as pm
+import pytensor.tensor as pt
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
+pytensor.config.floatX = "float32"
 
 pd.options.mode.chained_assignment = None
-warnings.filterwarnings('ignore')
+warnings.filterwarnings('ignore')  
 
 
 def pca_weights(df, columns):
@@ -204,7 +207,7 @@ def estimate_monthly_mri(input_csv, output_csv_path):
         # ----------- #
         # SAMPLING #
         # ----------- #
-        trace = pm.sample(draws = 400, tune = 600,
+        trace = pm.sample(draws = 200, tune = 200,
             chains = 2, cores = 1, nuts_sampler = 'nutpie',
             target_accept = 0.95, progressbar = True)
 
@@ -237,4 +240,113 @@ def estimate_monthly_mri(input_csv, output_csv_path):
 
     df_out.to_csv(output_csv_path, index=False)
 
+    return None
+
+
+def estimate_month_mri(input_csv, output_csv_path):
+    df = pd.read_csv(input_csv)
+    df = df.dropna().reset_index(drop=True)
+
+    month_map = {
+        'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
+        'jul':7,'aug':8,'sept':9,'oct':10,'nov':11,'dec':12
+    }
+    df['month_num'] = df['month'].str.lower().map(month_map)
+    groups = list(df.groupby(['year','longitude','latitude']))
+    G = len(groups)
+
+    rain = np.zeros((G, 12))
+    temp = np.zeros((G, 12))
+    ndvi = np.zeros((G, 12))
+    elev = np.zeros((G, 12))
+    mri  = np.zeros(G)
+
+    def standardize(x):
+        return (x - x.mean()) / (x.std() + 1e-6)
+
+    def logit(x):
+        x = np.clip(x, 1e-6, 1 - 1e-6)
+        return np.log(x / (1 - x))
+
+    full_months = np.arange(1, 13)
+
+    for i, ((year, lon, lat), group) in tqdm(
+            enumerate(groups), total=len(groups), desc='Preparing data'):
+        group = group.set_index('month_num').reindex(full_months)
+        numeric_cols = group.select_dtypes(include=[np.number]).columns
+        group.loc[:, numeric_cols] = group[numeric_cols].interpolate(limit_direction='both')
+        rain[i] = standardize(group['precipitation_mm'].values)
+        temp[i] = standardize(group['temperature_C'].values)
+        ndvi[i] = standardize(group['ndvi'].values)
+        elev[i] = standardize(group['elevation_m'].values)
+        mri[i]  = group['mri_value'].iloc[0]
+
+    mri_logit = logit(mri).astype('float32')
+    mri       = mri.astype('float32')
+
+    # Stack covariates: shape (4, G, 12) → pre-cast outside model
+    X = np.stack([rain, temp, ndvi, elev], axis=0).astype('float32')
+
+    with pm.Model() as model:
+
+        alpha  = pm.Normal('alpha', 0.7, 0.2)
+        beta   = pm.Normal('beta', 0, 1, shape=4)
+        sigma  = pm.HalfNormal('sigma', 1.0)
+
+        z0_raw = pm.Normal('z0_raw', 0, 1, shape=G)
+        eta0   = mri_logit + 0.5 * z0_raw              # (G,)
+
+        # Covariate term: (G, 12)
+        X_pt     = pt.as_tensor_variable(X)            # (4, G, 12)
+        cov_term = pt.tensordot(beta, X_pt, axes=[[0],[0]])  # (G, 12)
+
+        # Innovation noise shared across groups
+        eps = pm.Normal('eps', 0, 1, shape=11)         # (11,)
+
+        # ── scan with alpha and sigma passed as non_sequences ────────────────
+        # This is the fix: RVs must be explicit inputs, not closures
+        def transition(cov_t, eps_t, eta_prev, alpha_, sigma_):
+            return alpha_ * eta_prev + cov_t + sigma_ * eps_t
+
+        # scan sequences must be (steps, ...) — transpose cov to (11, G)
+        cov_seq = cov_term[:, 1:].T   # (11, G)  — time-major
+
+        eta_rest, _ = pytensor.scan(
+            fn=transition,
+            sequences=[cov_seq, eps],          # stepped over axis-0 (time)
+            outputs_info=eta0,                 # initial carry: (G,)
+            non_sequences=[alpha, sigma],      # ← pass RVs explicitly here
+        )
+        # eta_rest: (11, G), prepend eta0 → (12, G) → (G, 12)
+        eta_all = pt.concatenate([eta0[None, :], eta_rest], axis=0).T
+
+        z_all  = pm.Deterministic('z_all', pm.math.sigmoid(eta_all))  # (G,12)
+        z_mean = z_all.mean(axis=1)                                    # (G,)
+
+        pm.Normal('annual_obs', mu=z_mean, sigma=0.05, observed=mri)
+
+        trace = pm.sample(
+            draws=1000,
+            tune=1000,
+            chains=4,
+            cores=2,
+            nuts_sampler='numpyro',
+            target_accept=0.85,
+            progressbar=True,
+        )
+
+    # ── Extract & rebuild output ─────────────────────────────────────────────
+    z_post = trace.posterior['z_all'].mean(dim=('chain', 'draw')).values
+    # z_post shape: (G, 12)
+
+    results = []
+    for i, ((year, lon, lat), group) in enumerate(groups):
+        g = group.copy().set_index('month_num').reindex(full_months).reset_index()
+        g['year'], g['longitude'], g['latitude'] = year, lon, lat
+        numeric_cols = g.select_dtypes(include=['number']).columns
+        g[numeric_cols] = g[numeric_cols].astype('float64').interpolate().bfill().ffill()
+        g['monthly_mri'] = z_post[i]
+        results.append(g)
+
+    pd.concat(results).to_csv(output_csv_path, index=False)
     return None
