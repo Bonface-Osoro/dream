@@ -15,21 +15,11 @@ library(ggpubr)
 suppressMessages(library(tidyverse))
 folder <- dirname(rstudioapi::getSourceEditorContext()$path)
 
-df <- read.csv(file.path(folder, '..', 'results', 'processed', 'zimbabwe',
-                         'zimbabwe_combined.csv'))
-
-df_wide <- df %>%
-  pivot_wider(
-    names_from = metric,    
-    values_from = value     
-  )
-
-# View result
-head(df_wide)
-#####################
-## REGRESSION MAPS ##
-#####################
-national_shp = st_read(file.path(folder, '..', 'data', 'raw', 'uga.shp'))
+##############
+## MRI MAPS ##
+##############
+national_shp = st_read(file.path(folder, '..', 'data', 'raw', 'shapefiles', 
+                                 'uga.shp'))
 ug_data <- st_read(file.path(folder, '..', 'data', 'raw', 'shapefiles', 
                              'gadm41_UGA_2.shp'))
 mri_data <- read.csv(file.path(folder, '..', 'results', 'final', 
@@ -67,4 +57,7 @@ path = file.path(folder, 'figures', '2009_2020_annual_mri.png')
 png(path, units="in", width=7, height=6, res=720)
 print(annual_mri)
 dev.off()
+
+
+
 

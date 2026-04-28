@@ -46,4 +46,4 @@ monthly_mri_output = os.path.join(DATA_RESULTS, 'mri', 'zimbabwe', 'ZWE_malaria_
 
 if __name__ == "__main__":
     
-        estimate_monthly_mri(input_mri_file, monthly_mri_output)
+        estimate_month_mri(input_mri_file, monthly_mri_output)

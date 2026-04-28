@@ -183,5 +183,14 @@ print(combined_plots)
 dev.off()
 
 
+lstm_mri <- read.csv(file.path(folder, '..', 'results', 'final','lstm', 
+                              'lstm_per_location_metrics.csv'))
+
+df_hold <- lstm_mri %>%
+  filter(year == 2020, month_num >= 6) %>%
+  left_join(metrics, by = c("longitude", "latitude"))
+
+obs <- df_hold$monthly_mri
+
 
 
