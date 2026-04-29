@@ -32,16 +32,15 @@ select_sites <- function(df, rules) {
 
 # ── Helper: build date column ─────────────────────────────────────────────────
 add_date <- function(df) {
-  month_map <- c(jan=1, feb=2, mar=3, apr=4, may=5, jun=6,
-                 jul=7, aug=8, sep=9, sept=9, oct=10, nov=11, dec=12)
   df <- df %>%
     mutate(
-      month_n = month_map[tolower(trimws(month))],
-      date    = as.Date(paste(year, month_n, 15, sep = "-"))
+      month_clean = tolower(trimws(month)),
+      month_n = dplyr::recode(month_clean,
+                              jan=1L,feb=2L,mar=3L,apr=4L,may=5L,jun=6L,
+                              jul=7L,aug=8L,sep=9L,sept=9L,oct=10L,nov=11L,dec=12L),
+      date = as.Date(paste(year, month_n, 15, sep = "-"))
     ) %>%
-    # Exclude November (stuck at 0.5) and December (stuck at 0.0) —
-    # these are data artefacts / boundary conditions, not real values
-    filter(!month_n %in% c(11, 12))
+    filter(!month_n %in% c(11L, 12L))
   df
 }
 
@@ -57,8 +56,8 @@ compute_ribbon <- function(df) {
       .groups  = "drop"
     ) %>%
     mutate(
-      lower = pmax(mean_mri - 1.96 * sd_mri, 0),
-      upper = pmin(mean_mri + 1.96 * sd_mri, 1)
+      lower = pmax(mean_mri - 0.5 * sd_mri, 0),
+      upper = pmin(mean_mri + 0.5 * sd_mri, 1)
     )
 }
 
@@ -157,8 +156,10 @@ build_panel <- function(df, site_defs, title, subtitle, ribbon_fill, ribbon_alph
       panel.grid.major.x = element_line(colour = "grey90", linewidth = 0.3),
       plot.margin = margin(8, 12, 4, 8)
     ) +
-    guides(linewidth = "none"
-    )
+    guides(fill     = guide_legend(order = 1), 
+        colour   = guide_legend(order = 2),
+        linetype = guide_legend(order = 2),
+        linewidth = "none")
   p
 }
 
@@ -194,9 +195,32 @@ p_uga <- build_panel(
   ribbon_fill  = "#a8c8e0"   # light blue
 )
 
+zwe_mri <- read.csv(file.path(folder, '..', 'results', 'final','mri', 
+                              'zimbabwe', 'ZWE_malaria_risk_index_monthly.csv'))
+
+zwe_locs <- zwe_mri %>%
+  select(longitude, latitude, elevation_m) %>%
+  distinct()
+
+zwe_sites <- data.frame(
+  label = c("Lowland site", "Highland site"),
+  lon   = c(31.97917, 32.89584),
+  lat   = c(-21.68750, -18.35417)
+)
+
+
+p_zwe <- build_panel(
+  df           = zwe_mri,
+  site_defs    = zwe_sites,
+  title        = "(B)  Zimbabwe",
+  subtitle = "2015-2022 downscaled monthly MRI at sample locations at lowland and highland geographical regions.",
+  ribbon_fill  = "#a8c8e0"   # light blue
+)
+
+
 
 # ── Combine and save ──────────────────────────────────────────────────────────
-combined <- p_uga / p_uga +
+combined <- p_uga / p_zwe +
   plot_layout(heights = c(1, 1)) &
   theme(axis.title.x = element_blank())
 
