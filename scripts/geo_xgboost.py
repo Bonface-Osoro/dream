@@ -25,7 +25,7 @@ lagged_features = ['ndvi', 'precipitation_mm', 'temperature_C', 'elevation_m',
 non_lagged_features = ['ndvi', 'precipitation_mm', 'temperature_C', 'elevation_m',
     'month_sin', 'month_cos', 'longitude', 'latitude']
 
-X_train, y_train, X_test, y_test, locations_test, _ = xg_split_data(df, non_lagged_features, 2018)
+X_train, y_train, X_test, y_test, locations_test, _ = xg_split_data(df, lagged_features, 2018)
 model = train_xgb(X_train, y_train, X_test, y_test)
 save_xg_and_logs(model, model_path)
 
