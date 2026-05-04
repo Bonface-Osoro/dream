@@ -681,6 +681,14 @@ def save_comparison_csvs(all_metrics, all_results, out_dir):
         for m in ['R2', 'RMSE', 'MAE']:
             merged_loc[f'{m}_delta_{strat}'] = (merged_loc[f'{m}_{strat}']
                                                 - merged_loc[f'{m}_baseline'])
+    
+    for strat in strategies:
+        obs_pred = all_results[strat].groupby(['latitude', 'longitude'])[
+            ['observed', 'predicted']].mean().reset_index()
+        obs_pred = obs_pred.rename(columns={
+            'observed':  f'observed_{strat}',
+            'predicted': f'predicted_{strat}'})
+        merged_loc = merged_loc.merge(obs_pred, on=['latitude', 'longitude'])
 
     merged_loc.to_csv(
         os.path.join(out_dir, 'comparison_per_location.csv'), index = False)
@@ -707,6 +715,14 @@ def save_comparison_csvs(all_metrics, all_results, out_dir):
         for m in ['R2', 'RMSE', 'MAE']:
             merged_time[f'{m}_delta_{strat}'] = (merged_time[f'{m}_{strat}']
                                                  - merged_time[f'{m}_baseline'])
+    
+    for strat in strategies:
+        obs_pred = all_results[strat].groupby(['year', 'month_num'])[
+            ['observed', 'predicted']].mean().reset_index()
+        obs_pred = obs_pred.rename(columns={
+            'observed':  f'observed_{strat}',
+            'predicted': f'predicted_{strat}'})
+        merged_time = merged_time.merge(obs_pred, on=['year', 'month_num'])
 
     merged_time.to_csv(
         os.path.join(out_dir, 'comparison_per_time.csv'), index = False)

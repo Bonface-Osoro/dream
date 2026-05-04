@@ -521,7 +521,7 @@ def run_single(df, model, features, target, id_cols,
 def save_comparison_csvs(gm_base, gm_ft,
                          per_loc_base, per_loc_ft,
                          per_time_base, per_time_ft,
-                         out_dir):
+                         out_dir, res_base=None, res_ft=None):
   
     """Saves CSV files comparing the baseline and fine-tuned
       models at global, per-location, and per-time levels.
@@ -552,16 +552,23 @@ def save_comparison_csvs(gm_base, gm_ft,
     ]).to_csv(os.path.join(out_dir, 
     'comparison_global_metrics.csv'), index = False)
 
-    # Per-location (with delta columns)
+# Per-location (with delta columns)
     if not per_loc_base.empty and not per_loc_ft.empty:
 
         loc_merge = per_loc_base.merge(
             per_loc_ft, on = ['latitude', 'longitude'],
             suffixes = ('_baseline', '_finetuned'))
         for m in ['R2', 'RMSE', 'MAE']:
-
             loc_merge[f"{m}_delta"] = (loc_merge[f'{m}_finetuned']
                                        - loc_merge[f'{m}_baseline'])
+        if res_base is not None and res_ft is not None:
+            for tag, res in [('baseline', res_base), ('finetuned', res_ft)]:
+                obs_pred = res.groupby(['latitude', 'longitude'])[
+                    ['observed', 'predicted']].mean().reset_index()
+                obs_pred = obs_pred.rename(columns={
+                    'observed':  f'observed_{tag}',
+                    'predicted': f'predicted_{tag}'})
+                loc_merge = loc_merge.merge(obs_pred, on=['latitude', 'longitude'])
         loc_merge.to_csv(
             os.path.join(out_dir, 'comparison_per_location.csv'), index = False)
 
@@ -571,12 +578,18 @@ def save_comparison_csvs(gm_base, gm_ft,
             per_time_ft, on = ['year', 'month_num'],
             suffixes = ('_baseline', '_finetuned'))
         for m in ['R2', 'RMSE', 'MAE']:
-
             time_merge[f'{m}_delta'] = (time_merge[f'{m}_finetuned']
                                         - time_merge[f'{m}_baseline'])
+        if res_base is not None and res_ft is not None:
+            for tag, res in [('baseline', res_base), ('finetuned', res_ft)]:
+                obs_pred = res.groupby(['year', 'month_num'])[
+                    ['observed', 'predicted']].mean().reset_index()
+                obs_pred = obs_pred.rename(columns={
+                    'observed':  f'observed_{tag}',
+                    'predicted': f'predicted_{tag}'})
+                time_merge = time_merge.merge(obs_pred, on=['year', 'month_num'])
         time_merge.to_csv(
             os.path.join(out_dir, 'comparison_per_time.csv'), index = False)
-
 
 def run_comparative_evaluation(
         model_path   = MODEL_PATH,
@@ -650,7 +663,8 @@ def run_comparative_evaluation(
     log.info("STEP 4 — SAVING COMPARISON FILES")
     log.info("=" * 60)
     save_comparison_csvs(gm_base, gm_ft, loc_base, loc_ft,
-                         time_base, time_ft, output_dir)
+                            time_base, time_ft, output_dir,
+                            res_base=res_base, res_ft=res_ft)
     plot_comparison(res_base, res_ft, gm_base, gm_ft,
                     os.path.join(output_dir, 'comparison_plots.png'))
 
