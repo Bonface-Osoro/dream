@@ -17,8 +17,8 @@ mri_csv_path    <- file.path(folder, '..', 'results', 'final',
 output_gif      <- file.path(folder, 'figures', 'UGA_mri_timelapse.gif')
 
 YEARS      <- 2000:2020
-FPS        <- 8          # frames per second (lower = slower, higher = faster)
-PAUSE_END  <- 8          # extra pause on final frame (in frames)
+FPS        <- 15          # frames per second (lower = slower, higher = faster)
+PAUSE_END  <- 2          # extra pause on final frame (in frames)
 WIDTH_PX   <- 800
 HEIGHT_PX  <- 700
 # ─────────────────────────────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ p <- ggplot() +
 # ── Render GIF ────────────────────────────────────────────────────────────────
 cat("Rendering GIF (this may take a minute)...\n")
 
-n_frames <- length(YEARS) * 10 + PAUSE_END   # ~10 frames per year + pause
+n_frames <- length(YEARS) * 4 + PAUSE_END   # ~10 frames per year + pause
 
 anim <- animate(
   p,

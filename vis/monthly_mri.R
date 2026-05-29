@@ -62,7 +62,7 @@ ZWE_monthly_mri <- ggplot() + geom_ribbon(data = ribbon,
                                                 "Site 2 (2,106 m)" = "dashed")) +
   facet_wrap(~ year, ncol = 3, scales = "free_y") +labs(title    = "Zimbabwe Monthly MRI",
     subtitle = "2020–2022 monthly MRI anomaly relative to 3-year climatological mean for two sample sites.",
-    caption  = "For each month between 2020 and 2022, we show how much the MRI at sites 1 and 2 deviated from what was typical for that month on average across those three years.",
+    caption  = "For each month (2020-2022), we show how much the MRI at sites 1 and 2 deviated from what was typical for that month on average across those 3 years.",
     x = "Month", y = "MRI") + theme_minimal() +
   theme(plot.title = element_text(face = "bold", size = 12, hjust = 0),
     plot.subtitle = element_text(size = 11, hjust = 0, margin = margin(b = 18)),
@@ -82,7 +82,7 @@ ZWE_monthly_mri <- ggplot() + geom_ribbon(data = ribbon,
     panel.grid.minor = element_blank(),   
     axis.line = element_line(colour = "black", linewidth = 0.3),  
     plot.margin = margin(8, 12, 4, 8),
-    plot.caption = element_text(size = 8, hjust = 0, colour = "#2e7d32",
+    plot.caption = element_text(size = 9, hjust = 0, colour = "#2e7d32",
                                 margin = margin(t = 10), face = "italic")) +
   guides(fill = guide_legend(order = 1), colour = guide_legend(order = 2),
     linetype = guide_legend(order = 2))

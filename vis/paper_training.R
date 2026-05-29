@@ -44,8 +44,7 @@ df$model <- factor(df$model, levels = c("XGBoost", "LSTM"))
 
 
 train_plots <- ggplot(df, aes(x = step, y = RMSE, colour = series)) +
-  geom_point(size = 0.6, alpha = 0.8) +
-  geom_line(linewidth = 0.6, alpha = 0.6) +
+  geom_line(linewidth = 0.3, alpha = 0.6) +
   scale_colour_manual(name   = NULL,
     values = c("Train RMSE" = "#2176AE", "Val RMSE" = "#E07B39")) +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0.02, 0.05))) +
@@ -112,33 +111,49 @@ df$Metric <- factor(df$Metric, levels = c("R2", "RMSE", "MAE"))
 test_metrics <- ggplot(df, aes(x = Metric, y = Value, fill = Metric)) +
   geom_col(width = 0.98, alpha = 0.85) +
   geom_text(aes(label = round(Value, 4)),
-            vjust = -0.4, size = 3.2) +
+            vjust = -0.4, size = 2) +
   scale_fill_manual(
     values = c("R2" = "#2176AE", "RMSE" = "#E07B39", "MAE" = "#57A773"),
     guide  = "none") +
   scale_y_continuous(limits = c(0, 1.08),
                      expand = expansion(mult = c(0.0, 0.05))) +
   facet_wrap(~ model, ncol = 2, scales = "free_y") +
-  labs(title = "Model Test Performance",
+  labs(title = "(B) Model Test Performance",
     subtitle = "R², RMSE and MAE evaluated on the Uganda held-out test set",
     x = NULL,
     y = "Value") + theme_minimal() +
   theme(legend.position = 'bottom',
-        plot.title = element_text(size = 12, face = "bold"),
-        plot.subtitle = element_text(size = 10),
+        plot.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 8),
+        axis.title.y = element_text(size = 7),
+        axis.title.x = element_text(size = 7),
         panel.border = element_blank(),
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
-        axis.text.x = element_text(size = 9),
-        axis.text.y = element_text(size = 9),
-        axis.title.x = element_text(size = 8),
+        axis.text.x = element_text(size = 7),
+        axis.text.y = element_text(size = 7),
         axis.line.x  = element_line(size = 0.15),
         axis.line.y  = element_line(size = 0.15),
-        legend.title = element_text(size = 8),
-        legend.text = element_text(size = 7))
+        legend.title = element_text(size = 7),
+        legend.text = element_text(size = 6)) 
 
 
+combined <- train_plots / test_metrics +
+  plot_layout(heights = c(1, 1)) &
+  theme(axis.title.x = element_blank())
 
+# Add shared x-axis label at the bottom
+combined <- combined +
+  plot_annotation(
+    theme   = theme(
+      plot.caption = element_text(hjust = 0.5, size = 11, margin = margin(t = 2))
+    )
+  )
+
+
+output_path = file.path(folder, 'figures', 'train_1_plots.png')
+ggsave(filename = output_path, plot = combined,
+       width = 5, height = 5, dpi = 720, bg = "white")
 
 
 
