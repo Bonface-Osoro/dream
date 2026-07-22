@@ -26,8 +26,8 @@ if __name__ == '__main__':
     #shp_to_csv('mortality_rate', in_folder, out_folder)
 
     #Combine csvs for each metric into one file
-    '''combined_folder = os.path.join(DATA_PROCESSED, 'combined_data')
-    os.makedirs(combined_folder, exist_ok = True)
+    combined_folder = os.path.join(DATA_PROCESSED, 'combined_data')
+    '''os.makedirs(combined_folder, exist_ok = True)
     incidence_folder = os.path.join(out_folder, 'incidence_rate')
     parasite_folder = os.path.join(out_folder, 'parasite_rate')
     net_use_folder = os.path.join(out_folder, 'net_use')
@@ -38,20 +38,20 @@ if __name__ == '__main__':
     combine_csvs(parasite_folder, os.path.join(combined_folder, 'parasite_rate_combined.csv'))
     combine_csvs(net_use_folder, os.path.join(combined_folder, 'net_use_combined.csv'))
     combine_csvs(net_access_folder, os.path.join(combined_folder, 'net_access_combined.csv'))
-    combine_csvs(mortality_folder, os.path.join(combined_folder, 'mortality_rate_combined.csv'))
+    combine_csvs(mortality_folder, os.path.join(combined_folder, 'mortality_rate_combined.csv'))'''
 
     #Select valid years for each metric
     final_folder = os.path.join(DATA_PROCESSED)
-    select_valid_years('incidence_rate', combined_folder, final_folder)
-    select_valid_years('parasite_rate', combined_folder, final_folder)
-    select_valid_years('net_use', combined_folder, final_folder)
-    select_valid_years('net_access', combined_folder, final_folder)
-    select_valid_years('mortality_rate', combined_folder, final_folder)
+    #select_valid_years('incidence_rate', combined_folder, final_folder)
+    #select_valid_years('parasite_rate', combined_folder, final_folder)
+    #select_valid_years('net_use', combined_folder, final_folder)
+    #select_valid_years('net_access', combined_folder, final_folder)
+    #select_valid_years('mortality_rate', combined_folder, final_folder)
 
     input_years_folder = os.path.join(DATA_RESULTS, 'complete')
     output_years_folder = os.path.join(DATA_RESULTS, 'spatial_temporal_data') 
     combine_year_files(input_years_folder, output_years_folder)
 
-    ndvi_folder = os.path.join(DATA_RAW, 'zimbabwe', 'temperature')
+    '''ndvi_folder = os.path.join(DATA_RAW, 'zimbabwe', 'temperature')
     combined_folder = os.path.join(DATA_PROCESSED, 'zimbabwe', 'combined_data')
     combine_monthly_temp(ndvi_folder,combined_folder)'''

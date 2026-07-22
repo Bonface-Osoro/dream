@@ -128,7 +128,7 @@ def select_valid_years(data_type, input_folder, output_folder):
 
     metric_name = filtered_df['metric'].iloc[0]
     csv_name = f'{metric_name}.csv'
-    out_folder = os.path.join(output_folder, 'malaria_indices')
+    out_folder = os.path.join(output_folder, 'zambia', 'malaria_indices')
     os.makedirs(out_folder, exist_ok = True)
     path_out = os.path.join(out_folder, csv_name)
     filtered_df.to_csv(path_out, index=False)
@@ -190,9 +190,6 @@ def combine_year_files(input_folder, output_folder):
     print(f'\nDone! Combined CSV saved to:\n{output_path}')
 
     return combined_df
-
-
-    import pandas as pd
 
 
 def normalize_column(df, column_name):
