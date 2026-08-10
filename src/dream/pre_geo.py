@@ -261,11 +261,11 @@ def eco_mri(annual_csv_path, monthly_csv_path, output_csv_path):
     missing = merged_df['mri_value'].isna().sum()
     if missing > 0:
 
-        print(f"Warning: {missing} rows did not match and have missing MRI values.")
+        print(f'Warning: {missing} rows did not match & have missing MRI values.')
 
     merged_df.to_csv(output_csv_path, index = False)
 
-    print(f"Merge complete. File saved to: {output_csv_path}")
+    print(f'File saved to: {output_csv_path}')
 
     return merged_df
 
@@ -278,9 +278,11 @@ def combine_ndvi_monthly(input_folder, output_folder):
     Parameters
     ----------
     input_folder : str
-        Path to the folder containing the monthly NDVI CSV files to be combined.
+        Path to the folder containing the monthly NDVI 
+        CSV files to be combined.
     output_file : str
-        Path to the output CSV file where the combined data will be saved.
+        Path to the output CSV file where the combined 
+        data will be saved.
 
     """
     files = glob.glob(os.path.join(input_folder, '*.xlsx'))
@@ -293,26 +295,23 @@ def combine_ndvi_monthly(input_folder, output_folder):
         df = pd.read_excel(file)
         
         filename = os.path.basename(file)
-        month = filename.split("_")[-1].split(".")[0].lower()
-        
-        df = df.drop(columns=['OBJECTID', 'rainfall', 'normalized_rain'], 
-                     errors = 'ignore')
+        name_no_ext = filename.split(".")[0]
+        year = name_no_ext.split("_")[0]
+        month = name_no_ext.split("_")[-1].lower()
         
         df = df.rename(columns = {'RASTERVALU': 'ndvi'})
+        df['year'] = int(year)
         df['month'] = month
         df = df.drop_duplicates(subset = ['year', 'longitude', 'latitude'])
-        
+ 
         all_dfs.append(df)
 
     final_df = pd.concat(all_dfs, ignore_index=True)
     final_df = final_df.sort_values(by = ['year', 'longitude', 'latitude', 'month'])
     os.makedirs(output_folder, exist_ok = True)
 
-    output_path = os.path.join(output_folder, 'combined_monthly_ndvi.csv')
+    output_path = os.path.join(output_folder, 'ZMB_combined_monthly_ndvi.csv')
     final_df.to_csv(output_path, index = False)
-
-
-    return None
 
 
 def combine_rain_monthly(input_folder, output_folder):
@@ -323,9 +322,11 @@ def combine_rain_monthly(input_folder, output_folder):
     Parameters
     ----------
     input_folder : str
-        Path to the folder containing the monthly rain CSV files to be combined.
+        Path to the folder containing the monthly rain 
+        CSV files to be combined.
     output_file : str
-        Path to the output CSV file where the combined data will be saved.
+        Path to the output CSV file where the combined 
+        data will be saved.
 
     """
     files = glob.glob(os.path.join(input_folder, '*.xlsx'))
@@ -338,12 +339,12 @@ def combine_rain_monthly(input_folder, output_folder):
         df = pd.read_excel(file)
         
         filename = os.path.basename(file)
-        month = filename.split("_")[-1].split(".")[0].lower()
-        
-        df = df.drop(columns=['OBJECTID', 'rainfall', 'normalized_rain'], 
-                     errors = 'ignore')
+        name_no_ext = filename.split(".")[0]
+        year = name_no_ext.split("_")[0]
+        month = name_no_ext.split("_")[-1].lower()
         
         df = df.rename(columns = {'RASTERVALU': 'precipitation_mm'})
+        df['year'] = int(year)
         df['month'] = month
         df = df.drop_duplicates(subset = ['year', 'longitude', 'latitude'])
         
@@ -353,7 +354,7 @@ def combine_rain_monthly(input_folder, output_folder):
     final_df = final_df.sort_values(by = ['year', 'longitude', 'latitude', 'month'])
     os.makedirs(output_folder, exist_ok = True)
 
-    output_path = os.path.join(output_folder, 'combined_monthly_rain.csv')
+    output_path = os.path.join(output_folder, 'ZMB_combined_monthly_rain.csv')
     final_df.to_csv(output_path, index = False)
 
 
@@ -368,9 +369,11 @@ def combine_monthly_temp(input_folder, output_folder):
     Parameters
     ----------
     input_folder : str
-        Path to the folder containing the monthly temperature CSV files to be combined.
+        Path to the folder containing the monthly temperature 
+        CSV files to be combined.
     output_file : str
-        Path to the output CSV file where the combined data will be saved.
+        Path to the output CSV file where the combined data 
+        will be saved.
 
     """
     files = glob.glob(os.path.join(input_folder, '*.xlsx'))
@@ -383,13 +386,13 @@ def combine_monthly_temp(input_folder, output_folder):
         df = pd.read_excel(file)
         
         filename = os.path.basename(file)
-        month = filename.split("_")[-1].split(".")[0].lower()
-        
-        df = df.drop(columns=['OBJECTID', 'rainfall', 'normalized_rain'], 
-                     errors = 'ignore')
+        name_no_ext = filename.split(".")[0]
+        year = name_no_ext.split("_")[0]
+        month = name_no_ext.split("_")[-1].lower()
         
         df = df.rename(columns = {'RASTERVALU': 'temperature_C'})
         df['temperature_C'] = df['temperature_C'] - 273.15
+        df['year'] = int(year)
         df['month'] = month
         df = df.drop_duplicates(subset = ['year', 'longitude', 'latitude'])
         
@@ -399,16 +402,17 @@ def combine_monthly_temp(input_folder, output_folder):
     final_df = final_df.sort_values(by = ['year', 'longitude', 'latitude', 'month'])
     os.makedirs(output_folder, exist_ok = True)
 
-    output_path = os.path.join(output_folder, 'combined_monthly_temperature.csv')
+    output_path = os.path.join(output_folder, 'ZMB_combined_monthly_temperature.csv')
     final_df.to_csv(output_path, index = False)
 
 
     return None
 
 
-def merge_eco_datasets(ndvi_path, elev_path, precip_path, temp_path, output_path):
-    """This function merges multiple climate datasets (NDVI, elevation, 
-    precipitation, temperature)
+def merge_eco_datasets(ndvi_path, elev_path, precip_path, 
+                       temp_path, output_path):
+    """This function merges multiple climate datasets 
+    (NDVI, elevation, precipitation, temperature)
     
     Parameters
     ----------
@@ -421,7 +425,8 @@ def merge_eco_datasets(ndvi_path, elev_path, precip_path, temp_path, output_path
     temp_path : str
         Path to the temperature CSV file.
     output_path : str
-        Path to the output CSV file where the merged data will be saved.
+        Path to the output CSV file where the merged data 
+        will be saved.
     """
 
     ndvi_df = pd.read_csv(ndvi_path)
@@ -429,13 +434,15 @@ def merge_eco_datasets(ndvi_path, elev_path, precip_path, temp_path, output_path
     precip_df = pd.read_csv(precip_path)
     temp_df = pd.read_csv(temp_path)
 
-    keys = ['year', 'longitude', 'latitude', 'month']
+    keys = ['year', 'longitude', 'latitude']
 
     merged_df = ndvi_df.merge(elev_df, on = keys, how = 'inner')
+    keys = ['year', 'longitude', 'latitude', 'month']
     merged_df = merged_df.merge(precip_df, on = keys, how = 'inner')
     merged_df = merged_df.merge(temp_df, on = keys, how = 'inner')
 
     merged_df = merged_df.sort_values(by = keys)
+    merged_df = merged_df.drop(columns = ['FID', 'FID_x', 'FID_y'])
 
     merged_df.to_csv(output_path, index=False)
 
