@@ -1,21 +1,3 @@
-"""
-GeoTIFF Multi-Variable Raster → CSV Converter
------------------------------------------------
-Processes five folders of raster data:
-  parasite_rate, incidence_rate, mortality_rate, net_access, net_use
-
-For each folder, all yearly GeoTIFF files are combined into a single CSV:
-  year, longitude, latitude, <variable_name>
-
-No per-year CSVs are saved — just one combined file per variable.
-
-Expected filename format:
-  202508_Global_Pf_Parasite_Rate_ZWE_2021.tiff
-  └─ year = last 4-digit token (1900–2099) in the filename → 2021
-
-CONFIG: set BASE_DIR and OUTPUT_DIR below, then run.
-"""
-
 import configparser
 import os
 import re
@@ -73,7 +55,7 @@ def extract_year(filename):
     return int(years[-1])
 
 
-def raster_to_df(tif_path, value_col, nodata = None):
+def raster_to_df(tif_path, value_col):
 
     """
     Read first band of a GeoTIFF and return a DataFrame:
@@ -99,16 +81,17 @@ def raster_to_df(tif_path, value_col, nodata = None):
     """
     with rasterio.open(tif_path) as src:
 
+        nodata = None
         band      = src.read(1).astype(float)
         nd_val    = nodata if nodata is not None else src.nodata
         transform = src.transform
         height, width = band.shape
 
         rows, cols = np.meshgrid(
-            np.arange(height), np.arange(width), indexing='ij'
+            np.arange(height), np.arange(width), indexing = 'ij'
         )
         lons, lats = xy(transform, rows.ravel(), cols.ravel(), 
-                        offset='center')
+                        offset = 'center')
         values     = band.ravel()
 
         df = pd.DataFrame({
@@ -118,16 +101,19 @@ def raster_to_df(tif_path, value_col, nodata = None):
         })
 
         if nd_val is not None:
+
             df = df[df[value_col] != nd_val]
 
         df = df[np.isfinite(df[value_col])]
         df = df[df[value_col] >= 0]
+        df = df.reset_index(drop = True)
 
-    return df.reset_index(drop=True)
+
+    return df
 
 
 def process_variable(folder_path, value_col,
-                     output_path, nodata,):
+                     output_path):
     
     """
     Process all TIFFs in one folder and save a single 
@@ -150,10 +136,12 @@ def process_variable(folder_path, value_col,
         if f.lower().endswith(('.tif', '.tiff'))])
 
     if not tif_files:
-        print(f"No .tif/.tiff files found in: {folder_path}")
+
+        print(f'No .tif/.tiff files found in: {folder_path}')
+        
         return
 
-    print(f"{len(tif_files)} file(s) found")
+    print(f'{len(tif_files)} file(s) found')
     all_dfs = []
 
     for fname in tif_files:
@@ -167,44 +155,41 @@ def process_variable(folder_path, value_col,
             print(f"Skipping '{fname}' — {e}")
             continue
 
-        df = raster_to_df(fpath, value_col, nodata = nodata)
+        df = raster_to_df(fpath, value_col, nodata = None)
         df.insert(0, 'year', year)
         all_dfs.append(df)
 
     if not all_dfs:
 
-        print(f"  ✗  No data extracted for {value_col}")
+        print(f'No data extracted for {value_col}')
         return
 
     combined = pd.concat(all_dfs, ignore_index = True).sort_values(
-        ['year', 'latitude', 'longitude']).reset_index(drop=True)
+        ['year', 'latitude', 'longitude']).reset_index(drop = True)
 
-    combined.to_csv(output_path, index=False)
-    print(f"     Years: {sorted(combined['year'].unique().tolist())}")
+    combined.to_csv(output_path, index = False)
 
 
 def run():
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok = True)
 
     for folder_name, cfg in VARIABLES.items():
+
         folder_path = os.path.join(BASE_DIR, folder_name)
         output_path = os.path.join(OUTPUT_DIR, cfg['output'])
 
-        print(f"Output   : {output_path}")
-
         if not os.path.isdir(folder_path):
             
-            print(f"Folder not found — skipping. "
-                  f"Check that '{folder_name}' exists inside BASE_DIR.")
+            print(f'Folder not found — skipping.')
             continue
 
-        process_variable(folder_path, cfg['column'], output_path, nodata=NO_DATA)
+        process_variable(folder_path, cfg['column'], 
+                         output_path, nodata = NO_DATA)
 
-    print("\n" + "=" * 60)
     print("Done.")
-    print("=" * 60)
 
 
 if __name__ == '__main__':
+    
     run()

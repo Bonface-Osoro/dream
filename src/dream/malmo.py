@@ -7,6 +7,7 @@ Developed by Bonface Osoro.
 March 2026
 
 """
+import os
 import pytensor
 import warnings
 import numpy as np
@@ -35,6 +36,7 @@ def pca_weights(df, columns):
     """
     # Scaling the data
     scaler = StandardScaler()
+    df = df.dropna(subset = columns)
     X_scaled = scaler.fit_transform(df[columns])
     
     # Applying PCA (first principal component)
@@ -83,9 +85,13 @@ def compute_mri(df, weight_dict):
     return mri
 
 
+import os
+
 def estimate_monthly_mri(input_csv, output_csv_path):
     """
     Estimate monthly MRI values using a Bayesian state-space model in PyMC.
+    Processes one year at a time, saving each year's CSV before moving on,
+    then writes a combined bulk CSV incrementally as each year completes.
 
     Parameters
     ----------
@@ -101,165 +107,12 @@ def estimate_monthly_mri(input_csv, output_csv_path):
     df = df.dropna().reset_index(drop=True)
     month_map = {
         'jan':1, 'feb':2, 'mar':3, 'apr':4, 'may':5, 'jun':6,
-        'jul':7, 'aug':8, 'sept':9, 'oct':10, 'nov':11, 'dec':12
+        'jul':7, 'aug':8, 'sep':9, 'oct':10, 'nov':11, 'dec':12
     }
 
     df['month_num'] = df['month'].str.lower().map(month_map)
-
-    groups = list(df.groupby(['year', 'longitude', 'latitude']))
-    G = len(groups)
-
-    # --------------
-    # BUILD ARRAYS #
-    # --------------
-    rain = np.zeros((G, 12))
-    temp = np.zeros((G, 12))
-    ndvi = np.zeros((G, 12))
-    elev = np.zeros((G, 12))
-    mri = np.zeros(G)
-
-    def standardize(x):
-
-        return (x - x.mean()) / (x.std() + 1e-6)
-
-    def logit(x):
-
-        x = np.clip(x, 1e-6, 1 - 1e-6)
-
-        return np.log(x / (1 - x))
 
     full_months = np.arange(1, 13)
-
-    for i, ((year, lon, lat), group) in tqdm(enumerate(groups),
-        total = len(groups), desc = 'Preparing data'):
-
-        group = group.set_index('month_num').reindex(full_months)
-        numeric_cols = group.select_dtypes(include = [np.number]).columns
-
-        # Fill missing months safely
-        group.loc[:, numeric_cols] = (group[numeric_cols]
-            .interpolate(limit_direction = 'both'))
-
-        rain[i] = standardize(group['precipitation_mm'].values)
-        temp[i] = standardize(group['temperature_C'].values)
-        ndvi[i] = standardize(group['ndvi'].values)
-        elev[i] = standardize(group['elevation_m'].values)
-        mri[i] = group['mri_value'].iloc[0]
-
-    # Convert MRI to latent space
-    mri_logit = logit(mri)
-
-    # -------------------- #
-    # HIERARCHICAL MODEL #
-    # -------------------- #
-    with pm.Model() as model:
-
-        # Shared coefficients
-        alpha = pm.Normal('alpha', 0.7, 0.2)
-        beta_rain = pm.Normal('beta_rain', 0, 1)
-        beta_temp = pm.Normal('beta_temp', 0, 1)
-        beta_ndvi = pm.Normal('beta_ndvi', 0, 1)
-        beta_elev = pm.Normal('beta_elev', 0, 1)
-
-        sigma = pm.HalfNormal('sigma', 1.0)
-
-        # -----------------------------
-        # NON-CENTERED PARAMETERIZATION
-        # -----------------------------
-        z0_raw = pm.Normal('z0_raw', 0, 1, shape=G)
-
-        # Initialize in latent (logit) space
-        eta0 = pm.Deterministic('eta0', mri_logit + 0.5 * z0_raw)
-        eps = pm.Normal('eps', 0, 1, shape=(11,))
-
-        # -----------------
-        # LATENT DYNAMICS #
-        # -----------------
-        eta = [eta0]
-
-        for t in range(1, 12):
-
-            mu_t = (alpha * eta[t-1]
-                + beta_rain * rain[:, t]
-                + beta_temp * temp[:, t]
-                + beta_ndvi * ndvi[:, t]
-                + beta_elev * elev[:, t])
-
-            eta_t = pm.Deterministic(f'eta_{t}',
-                mu_t + sigma * eps[t-1])
-            eta.append(eta_t)
-        eta_stack = pm.math.stack(eta, axis=1)
-
-        # -----------------------------
-        # APPLY SIGMOID → constrain to (0,1)
-        # -----------------------------
-        z_stack = pm.Deterministic('z_stack',
-            pm.math.sigmoid(eta_stack))
-
-        # ------------------- #
-        # OBSERVATION MODEL #
-        # ------------------- #
-        z_mean = z_stack.mean(axis = 1)
-
-        pm.Normal('annual_obs', mu = z_mean,
-            sigma = 0.05,  observed = mri)
-
-        # ----------- #
-        # SAMPLING #
-        # ----------- #
-        trace = pm.sample(draws = 200, tune = 200,
-            chains = 2, cores = 1, nuts_sampler = 'nutpie',
-            target_accept = 0.95, progressbar = True)
-
-    # ----------------- #
-    # EXTRACT RESULTS #
-    # ----------------- #
-    z_post = trace.posterior['z_stack'].mean(dim = ('chain', 'draw')).values
-
-    # -------------------------#
-    # REBUILD OUTPUT DATAFRAME #
-    # -------------------------#
-    results = []
-
-    for i, ((year, lon, lat), group) in enumerate(groups):
-
-        g = group.copy()
-        g = g.set_index('month_num').reindex(full_months).reset_index()
-
-        g['year'] = year
-        g['longitude'] = lon
-        g['latitude'] = lat
-
-        numeric_cols = g.select_dtypes(include = ['number']).columns
-        g[numeric_cols] = (g[numeric_cols].astype('float64')
-            .interpolate().bfill().ffill())
-        g['monthly_mri'] = z_post[i]
-        results.append(g)
-
-    df_out = pd.concat(results)
-
-    df_out.to_csv(output_csv_path, index=False)
-
-    return None
-
-
-def estimate_month_mri(input_csv, output_csv_path):
-    df = pd.read_csv(input_csv)
-    df = df.dropna().reset_index(drop=True)
-
-    month_map = {
-        'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
-        'jul':7,'aug':8,'sept':9,'oct':10,'nov':11,'dec':12
-    }
-    df['month_num'] = df['month'].str.lower().map(month_map)
-    groups = list(df.groupby(['year','longitude','latitude']))
-    G = len(groups)
-
-    rain = np.zeros((G, 12))
-    temp = np.zeros((G, 12))
-    ndvi = np.zeros((G, 12))
-    elev = np.zeros((G, 12))
-    mri  = np.zeros(G)
 
     def standardize(x):
         return (x - x.mean()) / (x.std() + 1e-6)
@@ -268,85 +121,127 @@ def estimate_month_mri(input_csv, output_csv_path):
         x = np.clip(x, 1e-6, 1 - 1e-6)
         return np.log(x / (1 - x))
 
-    full_months = np.arange(1, 13)
+    out_base, out_ext = os.path.splitext(output_csv_path)
+    years = sorted(df['year'].unique())  # e.g. 2010, 2011, ..., 2024
 
-    for i, ((year, lon, lat), group) in tqdm(
-            enumerate(groups), total=len(groups), desc='Preparing data'):
-        group = group.set_index('month_num').reindex(full_months)
-        numeric_cols = group.select_dtypes(include=[np.number]).columns
-        group.loc[:, numeric_cols] = group[numeric_cols].interpolate(limit_direction='both')
-        rain[i] = standardize(group['precipitation_mm'].values)
-        temp[i] = standardize(group['temperature_C'].values)
-        ndvi[i] = standardize(group['ndvi'].values)
-        elev[i] = standardize(group['elevation_m'].values)
-        mri[i]  = group['mri_value'].iloc[0]
+    bulk_header_written = False
 
-    mri_logit = logit(mri).astype('float32')
-    mri       = mri.astype('float32')
+    for year in years:
 
-    # Stack covariates: shape (4, G, 12) → pre-cast outside model
-    X = np.stack([rain, temp, ndvi, elev], axis=0).astype('float32')
+        print(f"\n[YEAR {year}] Starting...")
+        df_year = df[df['year'] == year].reset_index(drop=True)
 
-    with pm.Model() as model:
+        groups = list(df_year.groupby(['year', 'longitude', 'latitude']))
+        G = len(groups)
 
-        alpha  = pm.Normal('alpha', 0.7, 0.2)
-        beta   = pm.Normal('beta', 0, 1, shape=4)
-        sigma  = pm.HalfNormal('sigma', 1.0)
+        # --------------
+        # BUILD ARRAYS #
+        # --------------
+        rain = np.zeros((G, 12))
+        temp = np.zeros((G, 12))
+        ndvi = np.zeros((G, 12))
+        elev = np.zeros((G, 12))
+        mri = np.zeros(G)
 
-        z0_raw = pm.Normal('z0_raw', 0, 1, shape=G)
-        eta0   = mri_logit + 0.5 * z0_raw              # (G,)
+        for i, ((yr, lon, lat), group) in tqdm(enumerate(groups),
+            total=len(groups), desc=f'[{year}] Preparing data'):
 
-        # Covariate term: (G, 12)
-        X_pt     = pt.as_tensor_variable(X)            # (4, G, 12)
-        cov_term = pt.tensordot(beta, X_pt, axes=[[0],[0]])  # (G, 12)
+            group = group.set_index('month_num').reindex(full_months)
+            numeric_cols = group.select_dtypes(include=[np.number]).columns
 
-        # Innovation noise shared across groups
-        eps = pm.Normal('eps', 0, 1, shape=11)         # (11,)
+            group.loc[:, numeric_cols] = (group[numeric_cols]
+                .interpolate(limit_direction='both'))
 
-        # ── scan with alpha and sigma passed as non_sequences ────────────────
-        # This is the fix: RVs must be explicit inputs, not closures
-        def transition(cov_t, eps_t, eta_prev, alpha_, sigma_):
-            return alpha_ * eta_prev + cov_t + sigma_ * eps_t
+            rain[i] = standardize(group['precipitation_mm'].values)
+            temp[i] = standardize(group['temperature_C'].values)
+            ndvi[i] = standardize(group['ndvi'].values)
+            elev[i] = standardize(group['elevation_m'].values)
+            mri[i] = group['mri_value'].iloc[0]
 
-        # scan sequences must be (steps, ...) — transpose cov to (11, G)
-        cov_seq = cov_term[:, 1:].T   # (11, G)  — time-major
+        mri_logit = logit(mri)
 
-        eta_rest, _ = pytensor.scan(
-            fn=transition,
-            sequences=[cov_seq, eps],          # stepped over axis-0 (time)
-            outputs_info=eta0,                 # initial carry: (G,)
-            non_sequences=[alpha, sigma],      # ← pass RVs explicitly here
+        # -------------------- #
+        # HIERARCHICAL MODEL #
+        # -------------------- #
+        with pm.Model() as model:
+
+            alpha = pm.Normal('alpha', 0.7, 0.2)
+            beta_rain = pm.Normal('beta_rain', 0, 1)
+            beta_temp = pm.Normal('beta_temp', 0, 1)
+            beta_ndvi = pm.Normal('beta_ndvi', 0, 1)
+            beta_elev = pm.Normal('beta_elev', 0, 1)
+
+            sigma = pm.HalfNormal('sigma', 1.0)
+
+            z0_raw = pm.Normal('z0_raw', 0, 1, shape=G)
+
+            eta0 = pm.Deterministic('eta0', mri_logit + 0.5 * z0_raw)
+            eps = pm.Normal('eps', 0, 1, shape=(11,))
+
+            eta = [eta0]
+
+            for t in range(1, 12):
+
+                mu_t = (alpha * eta[t-1]
+                    + beta_rain * rain[:, t]
+                    + beta_temp * temp[:, t]
+                    + beta_ndvi * ndvi[:, t]
+                    + beta_elev * elev[:, t])
+
+                eta_t = mu_t + sigma * eps[t-1]   # not stored as Deterministic
+                eta.append(eta_t)
+            eta_stack = pm.math.stack(eta, axis=1)
+
+            z_stack = pm.Deterministic('z_stack',
+                pm.math.sigmoid(eta_stack))
+
+            z_mean = z_stack.mean(axis=1)
+
+            pm.Normal('annual_obs', mu=z_mean,
+                sigma=0.05, observed=mri)
+
+            trace = pm.sample(draws=200, tune=200,
+                chains=2, cores=1, nuts_sampler='nutpie',
+                target_accept=0.95, progressbar=True)
+
+        z_post = trace.posterior['z_stack'].mean(dim=('chain', 'draw')).values
+
+        # -------------------------#
+        # REBUILD OUTPUT DATAFRAME #
+        # -------------------------#
+        results = []
+        for i, ((yr, lon, lat), group) in enumerate(groups):
+
+            g = group.copy()
+            g = g.set_index('month_num').reindex(full_months).reset_index()
+
+            g['year'] = yr
+            g['longitude'] = lon
+            g['latitude'] = lat
+
+            numeric_cols = g.select_dtypes(include=['number']).columns
+            g[numeric_cols] = (g[numeric_cols].astype('float64')
+                .interpolate().bfill().ffill())
+            g['monthly_mri'] = z_post[i]
+            results.append(g)
+
+        df_year_out = pd.concat(results)
+
+        # Save this year's file immediately
+        year_csv_path = f"{out_base}_{year}{out_ext}"
+        df_year_out.to_csv(year_csv_path, index=False)
+        print(f"[SAVED] Year {year} -> {year_csv_path}")
+
+        # Append this year's rows into the bulk file immediately too,
+        # so the bulk CSV grows incrementally rather than only at the end
+        df_year_out.to_csv(
+            output_csv_path,
+            index=False,
+            mode='a' if bulk_header_written else 'w',
+            header=not bulk_header_written,
         )
-        # eta_rest: (11, G), prepend eta0 → (12, G) → (G, 12)
-        eta_all = pt.concatenate([eta0[None, :], eta_rest], axis=0).T
+        bulk_header_written = True
+        print(f"[SAVED] Year {year} appended to bulk file -> {output_csv_path}")
 
-        z_all  = pm.Deterministic('z_all', pm.math.sigmoid(eta_all))  # (G,12)
-        z_mean = z_all.mean(axis=1)                                    # (G,)
-
-        pm.Normal('annual_obs', mu=z_mean, sigma=0.05, observed=mri)
-
-        trace = pm.sample(
-            draws=1000,
-            tune=1000,
-            chains=4,
-            cores=2,
-            nuts_sampler='numpyro',
-            target_accept=0.85,
-            progressbar=True,
-        )
-
-    # ── Extract & rebuild output ─────────────────────────────────────────────
-    z_post = trace.posterior['z_all'].mean(dim=('chain', 'draw')).values
-    # z_post shape: (G, 12)
-
-    results = []
-    for i, ((year, lon, lat), group) in enumerate(groups):
-        g = group.copy().set_index('month_num').reindex(full_months).reset_index()
-        g['year'], g['longitude'], g['latitude'] = year, lon, lat
-        numeric_cols = g.select_dtypes(include=['number']).columns
-        g[numeric_cols] = g[numeric_cols].astype('float64').interpolate().bfill().ffill()
-        g['monthly_mri'] = z_post[i]
-        results.append(g)
-
-    pd.concat(results).to_csv(output_csv_path, index=False)
+    print(f"\n[DONE] All years processed. Bulk file complete -> {output_csv_path}")
     return None
