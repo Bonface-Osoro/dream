@@ -8,13 +8,29 @@ Measures the three constructs defined in the theoretical framework:
     Gamma(k, g)     = R2_g(k)           - R2_local(k)  federation gain
     Shapley(k)      = exact, over 2^3 = 8 coalitions   contribution
 
-Six regimes:
-    1. climatology   - seasonal mean, no ML, no sharing        (honest floor)
-    2. local         - train alone, share nothing              (sovereignty ref)
-    3. transfer      - Uganda ships weights, others fine-tune  (asymmetric)
-    4. fedavg        - weights averaged, no data moves         (sample or uniform)
-    5. fedprox       - fedavg + proximal term for non-IID
-    6. centralised   - pool raw data                           (utility ceiling)
+Regimes in this version:
+    1. climatology  - seasonal mean, no ML, no sharing            (honest floor)
+    2. local        - train alone, share nothing                  (sovereignty ref)
+    3. transfer     - single-source, one-time weight transfer,
+                       run with EACH of the three countries as the
+                       source in turn (source column identifies
+                       which). For each source/target pair, both a
+                       zero-shot (no fine-tuning) and a fine-tuned
+                       evaluation are recorded (mode column), to
+                       diagnose whether fine-tuning is simply
+                       re-converging to the local optimum regardless
+                       of initialization — see notes on transfer().
+    4. fedavg       - weights averaged, no data moves               (sample or uniform)
+    5. centralised  - pool raw data                                 (utility ceiling)
+
+Note: FedProx (mu grid), the DP-epsilon sweep, pairwise
+sub-federations, and the pooled-source reverse_transfer regime from
+earlier versions of this script have been removed from the __main__
+sweep. reverse_transfer() is retained as a function (in case it's
+needed again) but is no longer called — it has been superseded by
+looping transfer() over all three source countries, which isolates
+"which country is the source" as a single variable instead of
+conflating it with pooling multiple source countries' raw data.
 """
 import configparser
 import os
@@ -44,7 +60,6 @@ OUT_DIR = os.path.join(DATA_RESULTS, 'federated')
 os.makedirs(OUT_DIR, exist_ok = True)
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-
 if __name__ == '__main__':
     print(f'[DEVICE] Using: {DEVICE}')
     if DEVICE.type == 'cpu':
@@ -68,6 +83,14 @@ CLIENTS = {
                  'train': (2015, 2017), 'val': (2018, 2019), 'test': (2020, 2024)},
 }
 
+# Countries tested as a transfer SOURCE, in turn, in __main__. Each
+# non-source country becomes a target for that source.
+TRANSFER_SOURCES = ['uganda', 'zambia', 'zimbabwe']
+
+# Retained for reverse_transfer() only (no longer called by __main__).
+REVERSE_TRANSFER_SOURCES = ['zambia', 'zimbabwe']
+REVERSE_TRANSFER_TARGET = 'uganda'
+
 FEATURES = ['ndvi', 'precipitation_mm', 'temperature_C', 'elevation_m',
             'month_sin', 'month_cos', 'mri_lag1']
 TARGET   = 'monthly_mri'
@@ -79,13 +102,14 @@ STRIDE = 3
 
 N_ROUNDS, LOCAL_EPOCHS, LOCAL_LR, BATCH = 60, 2, 0.001, 256
 
+# L2 regularization on the optimizer.
 WEIGHT_DECAY = 1e-2
 
 FC_DROPOUT = 0.3
 
-SEEDS    = [0, 1, 2, 3]
-MU_GRID  = [0.001, 0.01, 0.1]
-EPS_GRID = [1, 8, None]
+TRANSFER_FINETUNE_EPOCHS = 40
+
+SEEDS = [0, 1, 2, 3]
 
 
 class MRILSTM(nn.Module):
@@ -268,47 +292,89 @@ def build_clients():
     return clients
 
 
+def build_pooled_loader(clients, members, split='train', batch_size=BATCH,
+                         shuffle=True):
+    """
+    This function builds a single DataLoader by pooling the raw
+    sequences of multiple clients for a given split. Each client's
+    target values are scaled using that client's OWN fitted y_scaler
+    before pooling — this keeps each client's target values on a
+    comparable relative scale without requiring one global scaler
+    fitted after the fact.
+
+    Parameters
+    ----------
+    clients : dict
+        Dictionary containing the processed datasets for each client,
+        as returned by build_clients().
+
+    members : list of str
+        Names of the clients to pool together.
+
+    split : str, default 'train'
+        Which split ('train' or 'val') to pool from `raw`.
+
+    batch_size : int, default BATCH
+        Batch size for the resulting DataLoader.
+
+    shuffle : bool, default True
+        Whether to shuffle the pooled dataset.
+
+    Returns
+    -------
+    loader : torch.utils.data.DataLoader
+        DataLoader over the pooled, scaled data from all `members`.
+    """
+    Xs = [torch.tensor(clients[m]['raw'][split][0], dtype = torch.float32)
+          for m in members]
+    ys = [torch.tensor(
+              clients[m]['y_scaler'].transform(
+                  clients[m]['raw'][split][1].reshape(-1, 1)),
+              dtype = torch.float32)
+          for m in members]
+
+    return DataLoader(
+        TensorDataset(torch.cat(Xs), torch.cat(ys)),
+        batch_size = batch_size, shuffle = shuffle,
+        num_workers = 2, pin_memory = True, persistent_workers = True)
+
+
 def local_update(global_state, loader, epochs, mu=0.0, dp_eps=None,
                   patience=10, min_epochs=15, tol=1e-5, verbose=True,
                   max_batches_per_epoch=None, val_loader=None):
 
     """
-    This function performs local model training for a single federated
-    learning client. The global model parameters are used to initialize
-    the local model, which is then trained for up to `epochs` epochs
-    using the client's training data. Optional FedProx and differential
-    privacy (DP-SGD) mechanisms can be applied during optimization.
+    This function performs local model training, starting from
+    `global_state`, for up to `epochs` epochs on `loader`. Used for
+    from-scratch local/centralised training (starting from a freshly
+    initialized model), for federated rounds, and for fine-tuning in
+    the transfer regime (starting from another client's already-
+    trained weights).
 
     If `val_loader` is provided, loss on that validation set is
     monitored each epoch and used to decide the "best" epoch and to
-    drive early stopping, rather than training loss. Monitoring
-    training loss alone allows the model to keep looking like it's
-    "improving" while it's actually just memorizing the training set
-    — confirmed on Zambia's data, where a model early-stopped on
-    training loss reached train R2 as high as 0.997 while test R2 was
-    negative. The epoch at which the best (lowest monitored loss)
-    state was found is tracked and printed, as a diagnostic for how
-    quickly overfitting sets in.
+    drive early stopping, rather than training loss.
 
     Parameters
     ----------
     global_state : collections.OrderedDict
-        State dictionary containing the parameters of the current
-        global model.
+        State dictionary containing the parameters to initialize the
+        model with.
 
     loader : torch.utils.data.DataLoader
-        DataLoader containing the client's local training data.
+        DataLoader containing the training data to fit on.
 
     epochs : int
-        Maximum number of local training epochs to perform.
+        Maximum number of training epochs to perform.
 
     mu : float, default 0.0
-        FedProx proximal regularization strength. If 0, no proximal
-        term is applied.
+        FedProx-style proximal regularization strength. Retained here
+        for backward compatibility with federate(), but unused by any
+        regime in this version's __main__ sweep.
 
     dp_eps : float or None, default None
         If provided, enables DP-SGD-style noise injection on
-        gradients, scaled by 1/dp_eps. If None, no noise is added.
+        gradients. Unused in this version's sweep.
 
     patience : int, default 10
         Number of consecutive non-improving epochs to tolerate before
@@ -323,12 +389,14 @@ def local_update(global_state, loader, epochs, mu=0.0, dp_eps=None,
         an "improvement" for early-stopping purposes.
 
     verbose : bool, default True
-        Whether to print per-epoch progress.
+        Whether to print per-epoch progress, including the epoch at
+        which the best monitored loss was found (best_epoch) — useful
+        for diagnosing how quickly a fine-tuning run re-converges,
+        i.e. how much the initialization actually mattered.
 
     max_batches_per_epoch : int or None, default None
         If set, caps the number of batches processed per epoch to
-        this value. Decouples per-epoch training cost from a
-        client's dataset size.
+        this value.
 
     val_loader : torch.utils.data.DataLoader or None, default None
         If provided, this loader is used to compute validation loss
@@ -438,8 +506,6 @@ def aggregate(states, weights):
     """
     This function aggregates the model parameters from multiple
     federated learning clients using a weighted average (FedAvg).
-    Each client's contribution is weighted according to the
-    corresponding value in `weights`.
 
     Parameters
     ----------
@@ -470,9 +536,8 @@ def aggregate(states, weights):
 def evaluate(state, client, split='test'):
     """
     This function evaluates a trained model on a client's dataset
-    split (test by default, or val for round-level monitoring during
-    federated training). Predictions are transformed back to the
-    original scale before computing evaluation metrics.
+    split. Predictions are transformed back to the original scale
+    before computing evaluation metrics.
 
     Parameters
     ----------
@@ -521,28 +586,17 @@ def federate(clients, members, mu=0.0, weighting='sample',
              round_patience=8, min_rounds=15, round_tol=1e-4,
              max_batches_per_epoch=500):
     """
-    This function trains a global federated learning model using the
-    specified client datasets. During each communication round, the
-    selected clients perform local model updates, their parameters are
-    aggregated using Federated Averaging (FedAvg), and the resulting
-    global model is redistributed. Optional FedProx, differential
-    privacy (DP-SGD), and round-by-round evaluation are supported.
+    This function trains a global federated learning model (FedAvg,
+    or FedProx if mu > 0) using the specified client datasets. During
+    each communication round, the selected clients perform local
+    model updates, their parameters are aggregated using Federated
+    Averaging, and the resulting global model is redistributed.
 
     Round-level early stopping: after each round, the mean validation
     R2 across `members` is computed. If it fails to improve by more
     than `round_tol` for `round_patience` consecutive rounds (once at
     least `min_rounds` have run), training stops and the best-seen
     global state is used for final evaluation.
-
-    Per-round local training is also capped via
-    `max_batches_per_epoch`, so clients with much larger datasets
-    (e.g. Zambia) don't dominate every round's wall-clock cost.
-
-    Note: per-round local_update calls here don't pass val_loader,
-    since LOCAL_EPOCHS=2 is too short for within-round validation
-    monitoring to be meaningful — round-level early stopping (based
-    on val R2 across the whole federation) is the mechanism that
-    protects against overfitting at this level instead.
 
     Parameters
     ----------
@@ -554,14 +608,15 @@ def federate(clients, members, mu=0.0, weighting='sample',
         List of client names participating in the federation.
 
     mu : float, default 0.0
-        FedProx proximal regularization strength.
+        FedProx proximal regularization strength. 0.0 = plain FedAvg.
 
     weighting : str, default 'sample'
         'sample' weights clients by training set size; anything else
         uses uniform weighting.
 
     dp_eps : float or None, default None
-        DP-SGD privacy budget passed through to local_update.
+        DP-SGD privacy budget passed through to local_update. Unused
+        in this version's sweep.
 
     seed : int, default 0
         Random seed for global model initialization.
@@ -570,8 +625,8 @@ def federate(clients, members, mu=0.0, weighting='sample',
         If True, records per-round test-set metrics for each member.
 
     round_patience : int, default 8
-        Number of consecutive non-improving rounds (on mean val R2)
-        to tolerate before stopping early.
+        Number of consecutive non-improving rounds to tolerate before
+        stopping early.
 
     min_rounds : int, default 15
         Minimum number of communication rounds to run before early
@@ -582,23 +637,19 @@ def federate(clients, members, mu=0.0, weighting='sample',
 
     max_batches_per_epoch : int or None, default 500
         Passed through to local_update each round; caps per-client
-        per-epoch batch count so round cost doesn't scale with the
-        largest client's dataset size.
+        per-epoch batch count.
 
     Returns
     -------
     final : dict
-        Dictionary containing the final evaluation metrics (R²,
-        RMSE, and MAE) for each participating client, using the
-        best-seen global model.
+        Dictionary containing the final evaluation metrics for each
+        participating client, using the best-seen global model.
 
     history : pandas.DataFrame
-        DataFrame containing the evaluation metrics recorded after
-        each communication round. Empty if `log_rounds` is False.
+        Per-round metrics, if log_rounds is True.
 
     gstate : collections.OrderedDict
-        State dictionary containing the best global model parameters
-        found during training (by mean validation R2).
+        Best global model parameters found during training.
     """
     torch.manual_seed(seed)
     gstate = MRILSTM().to(DEVICE).state_dict()
@@ -654,9 +705,7 @@ def climatology(clients):
     """
     This function evaluates a climatology baseline for each client by
     predicting the mean target value for each spatial location and
-    calendar month using the training data. The climatological
-    predictions are compared with the client's test data to compute
-    regression performance metrics.
+    calendar month using the training data.
 
     Parameters
     ----------
@@ -667,14 +716,8 @@ def climatology(clients):
     Returns
     -------
     results : pandas.DataFrame
-        DataFrame containing the climatology baseline performance for
-        each client with the following columns:
-
-        - 'regime' : Baseline method ('climatology').
-        - 'client' : Client name.
-        - 'R2' : Coefficient of determination (R²).
-        - 'RMSE' : Root Mean Squared Error.
-        - 'MAE' : Mean Absolute Error.
+        Columns: 'regime' ('climatology'), 'client', 'R2', 'RMSE',
+        'MAE'.
     """
     rows = []
     for name, c in clients.items():
@@ -699,12 +742,9 @@ def climatology(clients):
 def local_only(clients, seed):
     """
     This function trains an independent model for each client using
-    only its local training data. No federated aggregation is
-    performed. The trained models are evaluated on the corresponding
-    client's test dataset. Per-epoch batch count is capped so clients
-    with much larger datasets (e.g. Zambia) don't dominate wall-clock
-    time relative to smaller clients. Validation-based early stopping
-    (val_loader) is used to prevent overfitting.
+    only its local training data. No federated aggregation or
+    weight-sharing is performed. Validation-based early stopping is
+    used to prevent overfitting.
 
     Parameters
     ----------
@@ -718,15 +758,8 @@ def local_only(clients, seed):
     Returns
     -------
     results : pandas.DataFrame
-        DataFrame containing the evaluation results for each client
-        with the following columns:
-
-        - 'regime' : Training strategy ('local').
-        - 'client' : Client name.
-        - 'seed' : Random seed used for training.
-        - 'R2' : Coefficient of determination (R²).
-        - 'RMSE' : Root Mean Squared Error.
-        - 'MAE' : Mean Absolute Error.
+        Columns: 'regime' ('local'), 'client', 'seed', 'R2', 'RMSE',
+        'MAE'.
     """
     rows = []
     for name, c in clients.items():
@@ -743,15 +776,200 @@ def local_only(clients, seed):
     return pd.DataFrame(rows)
 
 
+def transfer(clients, seed, source, finetune_epochs=TRANSFER_FINETUNE_EPOCHS):
+    """
+    This function implements the "transfer" regime for a single given
+    `source` country: an asymmetric, one-directional knowledge
+    transfer rather than a federated (round-trip) aggregation. A
+    model is first trained from scratch on the `source` client's own
+    data (using the same procedure as local_only). That trained
+    model's weights are then shipped once to every OTHER client.
+
+    For each non-source client, TWO evaluations are recorded, to
+    diagnose how much (if anything) the transferred initialization
+    actually contributes versus fine-tuning simply re-converging to
+    the target's own local optimum:
+
+    - 'zeroshot' : the source model evaluated DIRECTLY on the
+      target's test set, with NO fine-tuning at all. This measures
+      the raw, as-is transferability of the source model.
+    - 'finetuned' : the source model after fine-tuning on the
+      target's own training data for up to `finetune_epochs` epochs
+      (with validation-based early stopping). This measures
+      performance after adaptation.
+
+    If 'finetuned' performance closely matches the target's own
+    'local' regime result regardless of which source was used, that
+    indicates the fine-tuning budget is large enough to erase the
+    initialization signal — i.e. the transfer regime is not really
+    testing what the source model contributes, just how well the
+    target can re-learn on its own. The 'zeroshot' numbers are the
+    direct evidence for or against this interpretation.
+
+    The source client's own row uses its already-trained local model,
+    evaluated the same way as every other regime, with mode='source'
+    (there is nothing to fine-tune from, since it originates the
+    transferred weights).
+
+    Parameters
+    ----------
+    clients : dict
+        Dictionary containing the processed datasets, DataLoaders,
+        and metadata for each client.
+
+    seed : int
+        Random seed used for both the source's training and each
+        target's fine-tuning, for reproducibility.
+
+    source : str
+        Name of the client whose trained weights are transferred to
+        every other client.
+
+    finetune_epochs : int, default TRANSFER_FINETUNE_EPOCHS
+        Maximum number of fine-tuning epochs for non-source clients.
+
+    Returns
+    -------
+    results : pandas.DataFrame
+        Columns: 'regime' (always 'transfer'), 'client', 'source',
+        'mode' ('source' / 'zeroshot' / 'finetuned'), 'seed', 'R2',
+        'RMSE', 'MAE'.
+    """
+    if source not in clients:
+        raise ValueError(f"transfer(): source client '{source}' not found "
+                          f"in clients dict (available: {list(clients)})")
+
+    torch.manual_seed(seed)
+    print(f'  [transfer:{source}] training source model on {source}...')
+    source_state = local_update(
+        MRILSTM().to(DEVICE).state_dict(),
+        clients[source]['loaders']['train'], N_ROUNDS * LOCAL_EPOCHS,
+        max_batches_per_epoch=1000,
+        val_loader=clients[source]['loaders']['val'])
+
+    rows = [{'regime': 'transfer', 'client': source, 'source': source,
+             'mode': 'source', 'seed': seed,
+             **evaluate(source_state, clients[source])}]
+
+    for name, c in clients.items():
+
+        if name == source:
+            continue
+
+        # Zero-shot: source weights evaluated directly on target's
+        # test set, no fine-tuning. Cheap (no training) — pure
+        # diagnostic of raw transferability.
+        zeroshot_metrics = evaluate(source_state, c)
+        rows.append({'regime': 'transfer', 'client': name, 'source': source,
+                     'mode': 'zeroshot', 'seed': seed, **zeroshot_metrics})
+
+        torch.manual_seed(seed)
+        print(f'  [transfer:{source}] fine-tuning on {name} from '
+              f'{source} weights...')
+        finetuned_state = local_update(
+            source_state, c['loaders']['train'], finetune_epochs,
+            max_batches_per_epoch=1000,
+            val_loader=c['loaders']['val'])
+
+        rows.append({'regime': 'transfer', 'client': name, 'source': source,
+                     'mode': 'finetuned', 'seed': seed,
+                     **evaluate(finetuned_state, c)})
+
+    return pd.DataFrame(rows)
+
+
+def reverse_transfer(clients, seed, sources=None, target=None,
+                      finetune_epochs=TRANSFER_FINETUNE_EPOCHS):
+    """
+    NOTE: no longer called from __main__ — superseded by looping
+    transfer() over each of the three countries as a single source
+    (see TRANSFER_SOURCES), which isolates "which country is the
+    source" as a single variable rather than conflating direction
+    with pooling multiple source countries' raw data together (which
+    this function does, and which is not privacy-preserving for the
+    pooled `sources`). Retained here in case a pooled-source
+    comparison is wanted again later.
+
+    Pools `sources`' (default Zambia + Zimbabwe) raw training data to
+    train ONE shared source model from scratch, then ships its
+    weights once to `target` (default Uganda), which fine-tunes its
+    own copy.
+
+    Parameters
+    ----------
+    clients : dict
+        Dictionary containing the processed datasets, DataLoaders,
+        and metadata for each client.
+
+    seed : int
+        Random seed used for both the pooled source training and the
+        target's fine-tuning, for reproducibility.
+
+    sources : list of str or None, default None
+        Names of the clients whose data is pooled to train the shared
+        source model. Falls back to REVERSE_TRANSFER_SOURCES if None.
+
+    target : str or None, default None
+        Name of the client that fine-tunes from the pooled source
+        model's weights. Falls back to REVERSE_TRANSFER_TARGET if
+        None.
+
+    finetune_epochs : int, default TRANSFER_FINETUNE_EPOCHS
+        Maximum number of fine-tuning epochs for the target client.
+
+    Returns
+    -------
+    results : pandas.DataFrame
+        Columns: 'regime' ('reverse_transfer'), 'client', 'seed',
+        'R2', 'RMSE', 'MAE'.
+    """
+    sources = sources if sources is not None else REVERSE_TRANSFER_SOURCES
+    target = target if target is not None else REVERSE_TRANSFER_TARGET
+
+    missing = [s for s in sources + [target] if s not in clients]
+    if missing:
+        raise ValueError(f"reverse_transfer(): client(s) not found: {missing} "
+                          f"(available: {list(clients)})")
+    if target in sources:
+        raise ValueError("reverse_transfer(): target must not also be a source "
+                          f"(target={target}, sources={sources})")
+
+    torch.manual_seed(seed)
+    pooled_train = build_pooled_loader(clients, sources, split='train')
+    pooled_val   = build_pooled_loader(clients, sources, split='val', shuffle=False)
+
+    print(f'  [reverse_transfer] training pooled source model on '
+          f'{"+".join(sources)}...')
+    source_state = local_update(
+        MRILSTM().to(DEVICE).state_dict(), pooled_train,
+        N_ROUNDS * LOCAL_EPOCHS, max_batches_per_epoch=1000,
+        val_loader=pooled_val)
+
+    rows = []
+    for s in sources:
+        rows.append({'regime': 'reverse_transfer', 'client': s, 'seed': seed,
+                     **evaluate(source_state, clients[s])})
+
+    torch.manual_seed(seed)
+    print(f'  [reverse_transfer] fine-tuning on {target} from '
+          f'{"+".join(sources)} weights...')
+    finetuned_state = local_update(
+        source_state, clients[target]['loaders']['train'], finetune_epochs,
+        max_batches_per_epoch=1000,
+        val_loader=clients[target]['loaders']['val'])
+
+    rows.append({'regime': 'reverse_transfer', 'client': target, 'seed': seed,
+                 **evaluate(finetuned_state, clients[target])})
+
+    return pd.DataFrame(rows)
+
+
 def centralised(clients, seed):
     """
     This function trains a centralized model by combining the training
     data from all clients into a single dataset. The model is trained
     on the pooled data without considering client boundaries and is
     subsequently evaluated separately on each client's test dataset.
-    Per-epoch batch count is capped for the same reason as local_only.
-    A pooled validation loader (all clients' val splits combined) is
-    used for early stopping, consistent with local_only.
 
     Parameters
     ----------
@@ -767,33 +985,15 @@ def centralised(clients, seed):
     Returns
     -------
     results : pandas.DataFrame
-        DataFrame containing the centralized model evaluation results
-        for each client with the following columns:
-
-        - 'regime' : Training strategy ('centralised').
-        - 'client' : Client name.
-        - 'seed' : Random seed used for training.
-        - 'R2' : Coefficient of determination (R²).
-        - 'RMSE' : Root Mean Squared Error.
-        - 'MAE' : Mean Absolute Error.
+        Columns: 'regime' ('centralised'), 'client', 'seed', 'R2',
+        'RMSE', 'MAE'.
     """
 
     torch.manual_seed(seed)
-    Xs = [torch.tensor(c['raw']['train'][0], dtype = torch.float32)
-          for c in clients.values()]
-    ys = [torch.tensor(c['y_scaler'].transform(c['raw']['train'][1].reshape(-1, 1)),
-                       dtype = torch.float32) for c in clients.values()]
-    loader = DataLoader(TensorDataset(torch.cat(Xs), torch.cat(ys)),
-                        batch_size = BATCH, shuffle = True,
-                        num_workers = 2, pin_memory = True, persistent_workers = True)
-
-    Xs_val = [torch.tensor(c['raw']['val'][0], dtype = torch.float32)
-              for c in clients.values()]
-    ys_val = [torch.tensor(c['y_scaler'].transform(c['raw']['val'][1].reshape(-1, 1)),
-                           dtype = torch.float32) for c in clients.values()]
-    val_loader = DataLoader(TensorDataset(torch.cat(Xs_val), torch.cat(ys_val)),
-                            batch_size = BATCH, shuffle = False,
-                            num_workers = 2, pin_memory = True, persistent_workers = True)
+    all_members = list(clients)
+    loader = build_pooled_loader(clients, all_members, split='train')
+    val_loader = build_pooled_loader(clients, all_members, split='val',
+                                     shuffle=False)
 
     st = local_update(MRILSTM().to(DEVICE).state_dict(), loader,
                       N_ROUNDS * LOCAL_EPOCHS, max_batches_per_epoch=1000,
@@ -808,9 +1008,6 @@ def mmd(A, B, gamma = None, n = 2000, seed = 0):
     """
     This function computes the Maximum Mean Discrepancy (MMD) between
     two datasets using a Gaussian Radial Basis Function (RBF) kernel.
-    MMD measures the distributional difference between two sets of
-    samples and can be used to quantify domain shift between client
-    datasets in federated learning.
 
     Parameters
     ----------
@@ -824,7 +1021,6 @@ def mmd(A, B, gamma = None, n = 2000, seed = 0):
     -------
     mmd_value : float
         Maximum Mean Discrepancy value between datasets A and B.
-        Larger values indicate greater distributional differences.
     """
     rng = np.random.default_rng(seed)
     A = A[rng.choice(len(A), min(n, len(A)), replace = False)]
@@ -845,10 +1041,6 @@ def pairwise_heterogeneity(clients):
     """
     This function computes pairwise distributional heterogeneity
     between clients using the Maximum Mean Discrepancy (MMD) metric.
-    For each client, the temporal input sequences and target values
-    are summarized into feature representations, and the MMD is
-    calculated between every pair of clients to quantify differences
-    in their data distributions.
 
     Parameters
     ----------
@@ -859,13 +1051,7 @@ def pairwise_heterogeneity(clients):
     Returns
     -------
     results : pandas.DataFrame
-        DataFrame containing pairwise client heterogeneity values with
-        the following columns:
-
-        - 'pair' : Pair of clients being compared.
-        - 'mmd' : Maximum Mean Discrepancy value between the two
-          client distributions. Larger values indicate greater
-          distributional differences.
+        Columns: 'pair', 'mmd'.
     """
     joint = {}
     for n, c in clients.items():
@@ -883,13 +1069,11 @@ def pairwise_heterogeneity(clients):
     return pd.DataFrame(rows)
 
 
-def shapley(clients, mu, seed):
+def shapley(clients, seed):
     """
     This function computes the Shapley value of each client in a
-    federated learning system. The Shapley value quantifies the
-    contribution of an individual client to the overall model
-    performance by evaluating the marginal improvement in performance
-    across all possible client coalitions.
+    federated learning system. Coalitions of size >= 2 are evaluated
+    using plain FedAvg (mu=0.0).
 
     Parameters
     ----------
@@ -897,19 +1081,13 @@ def shapley(clients, mu, seed):
         Dictionary containing the processed datasets, DataLoaders,
         and metadata for each client.
 
-    mu : float
-        FedProx proximal regularization parameter used during
-        federated training.
-
     seed : int
         Random seed used to ensure reproducibility of model training.
 
     Returns
     -------
     phi : dict
-        Dictionary containing the Shapley value for each client.
-        Larger values indicate greater contribution to the federated
-        model performance based on the evaluated R² improvement.
+        Shapley value for each client.
     """
     names = list(clients)
     N = len(names)
@@ -931,7 +1109,7 @@ def shapley(clients, mu, seed):
 
             else:
 
-                final, _, _ = federate(clients, list(coal), mu = mu, seed = seed)
+                final, _, _ = federate(clients, list(coal), mu = 0.0, seed = seed)
                 v[coal] = float(np.mean([final[m]['R2'] for m in coal]))
 
     from math import factorial
@@ -967,14 +1145,24 @@ if __name__ == '__main__':
     out.append(climatology(clients))
 
     # ── Seed-repeated regimes ────────────────────────────────────────────
-    # local, centralised, and fedavg/fedprox feed the headline constructs
-    # (delta_sov, gamma) and are the size-1/size-3 coalitions Shapley
-    # compares against — these need repeat seeds so a reported gap is
-    # distinguishable from ordinary init-to-init noise.
+    # local, transfer (looped over all 3 sources), and fedavg feed the
+    # headline constructs (delta_sov, gamma), so they're repeated across
+    # seeds to make a reported gap distinguishable from ordinary
+    # init-to-init noise.
+    #
+    # COST NOTE: looping transfer() over 3 sources roughly triples the
+    # cost of the transfer stage versus a single-source run (3 from-
+    # scratch source trainings + 6 fine-tunes per seed, vs. 1+2 before).
+    # Consider running with SEEDS = [0] first to check timing before
+    # committing to the full SEEDS list.
     for seed in SEEDS:
         seed_start = time.time()
-        print(f'\n===== seed {seed} (constructs-critical regimes) =====')
+        print(f'\n===== seed {seed} =====')
         out.append(local_only(clients, seed))
+
+        for source in TRANSFER_SOURCES:
+            out.append(transfer(clients, seed, source=source))
+
         out.append(centralised(clients, seed))
 
         for wt in ('sample', 'uniform'):
@@ -982,61 +1170,49 @@ if __name__ == '__main__':
             fa, hist, _ = federate(clients, members, mu = 0.0,
                                    weighting = wt, seed = seed, log_rounds = True)
             print(f'  [fedavg_{wt}] took {(time.time()-fa_start)/60:.1f} min')
-            out.append(pd.DataFrame([{'regime': f'fedavg_{wt}', 'client': k,
-                                      'seed': seed, **m} for k, m in fa.items()]))
+            out.append(pd.DataFrame([{'regime': 'fedavg', 'client': k,
+                                      'weighting': wt, 'seed': seed, **m}
+                                     for k, m in fa.items()]))
             hist.to_csv(f'{OUT_DIR}/rounds_fedavg_{wt}_s{seed}.csv', index = False)
-
-        for mu in MU_GRID:
-            fp_start = time.time()
-            fp, _, _ = federate(clients, members, mu = mu, seed = seed)
-            print(f'  [fedprox_mu{mu}] took {(time.time()-fp_start)/60:.1f} min')
-            out.append(pd.DataFrame([{'regime': f'fedprox_mu{mu}', 'client': k,
-                                      'seed': seed, **m} for k, m in fp.items()]))
 
         print(f'  === seed {seed} total: {(time.time()-seed_start)/60:.1f} min, '
               f'script elapsed: {(time.time()-script_start)/3600:.2f} hr ===')
 
-    # ── Exploratory sweeps: single representative seed ──────────────────
-    # Sub-federations and the DP-epsilon grid are read as trends across a
-    # parameter (which coalition, how much privacy budget), not as single
-    # point estimates feeding a construct — a single seed is enough to see
-    # the shape of the trend without the full multi-seed cost.
-    explore_seed = SEEDS[0]
-    explore_start = time.time()
-    print(f'\n===== exploratory sweeps (seed {explore_seed}) =====')
-
-    for coal in itertools.combinations(members, 2):
-        f2_start = time.time()
-        f2, _, _ = federate(clients, list(coal), mu = 0.01, seed = explore_seed)
-        print(f'  [fed_{"+".join(coal)}] took {(time.time()-f2_start)/60:.1f} min')
-        out.append(pd.DataFrame([{'regime': f'fed_{"+".join(coal)}',
-                                  'client': k, 'seed': explore_seed, **m}
-                                 for k, m in f2.items()]))
-
-    for eps in EPS_GRID:
-        dp_start = time.time()
-        fd, _, _ = federate(clients, members, mu = 0.01,
-                            dp_eps = eps, seed = explore_seed)
-        tag = f'dp_eps{eps}' if eps else 'dp_none'
-        print(f'  [{tag}] took {(time.time()-dp_start)/60:.1f} min')
-        out.append(pd.DataFrame([{'regime': tag, 'client': k, 'seed': explore_seed,
-                                  **m} for k, m in fd.items()]))
-
-    print(f'  === exploratory sweeps total: '
-          f'{(time.time()-explore_start)/60:.1f} min ===')
-
     res = pd.concat(out, ignore_index = True)
     res.to_csv(f'{OUT_DIR}/federated_results.csv', index = False)
+    print(f'\n[SAVED] federated_results.csv with regimes: '
+          f'{sorted(res["regime"].unique())}')
 
-    phi = shapley(clients, mu = 0.01, seed = explore_seed)
+    # Quick console diagnostic: compare each source's 'finetuned' R2
+    # against that same client's 'local' R2, to flag whether fine-
+    # tuning is converging back to the local optimum regardless of
+    # source (see TRANSFER_FINETUNE_EPOCHS notes above).
+    transfer_rows = res[(res['regime'] == 'transfer') & (res['mode'] == 'finetuned')]
+    local_rows = res[res['regime'] == 'local'][['client', 'seed', 'R2']] \
+        .rename(columns={'R2': 'R2_local'})
+    diag = transfer_rows.merge(local_rows, on=['client', 'seed'])
+    diag['diff_vs_local'] = diag['R2'] - diag['R2_local']
+    print('\n[DIAGNOSTIC] finetuned transfer R2 vs. that client\'s own local R2:')
+    print(diag.groupby(['source', 'client'])['diff_vs_local'].mean().round(4).to_string())
+    print('(values near 0 suggest fine-tuning is re-converging to the local '
+          'optimum regardless of source — check the zeroshot rows for '
+          'evidence of genuine transfer)')
+
+    phi = shapley(clients, seed = SEEDS[0])
     pd.DataFrame([{'client': k, 'shapley': v} for k, v in phi.items()]) \
       .to_csv(f'{OUT_DIR}/shapley.csv', index = False)
     print('\nShapley:', phi)
 
-    piv = res.pivot_table(index = ['client', 'seed'], columns = 'regime',
-                          values = 'R2')
-    piv['delta_sov_fedprox'] = piv['centralised'] - piv['fedprox_mu0.01']
-    piv['gamma_fedprox']     = piv['fedprox_mu0.01'] - piv['local']
+    # Constructs use fedavg (sample-weighted) as the headline federated
+    # regime 'g'.
+    fedavg_sample = res[(res['regime'] == 'fedavg') & (res['weighting'] == 'sample')]
+    piv = pd.concat([
+        res[res['regime'].isin(['local', 'centralised'])],
+        fedavg_sample.drop(columns='weighting')
+    ], ignore_index=True).pivot_table(
+        index = ['client', 'seed'], columns = 'regime', values = 'R2')
+    piv['delta_sov_fedavg'] = piv['centralised'] - piv['fedavg']
+    piv['gamma_fedavg']     = piv['fedavg'] - piv['local']
     piv.reset_index().to_csv(f'{OUT_DIR}/constructs.csv', index = False)
 
     print(f'\nDone -> federated_results.csv, constructs.csv, shapley.csv '
