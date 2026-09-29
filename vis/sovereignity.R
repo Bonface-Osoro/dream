@@ -2,6 +2,8 @@ library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(patchwork)
+library(ggpubr)
+library(sf)
 
 suppressMessages(library(tidyverse))
 folder <- dirname(rstudioapi::getSourceEditorContext()$path)
@@ -17,6 +19,15 @@ federated_results <- read.csv(file.path(folder, '..', 'results', 'final',
 
 shapely_df <- read.csv(file.path(folder, '..', 'results', 'final',
                                  'federated', 'shapley.csv'))
+
+uga <- read.csv(file.path(folder, '..', 'results', 'final',
+                                 'mri', 'malaria_risk_index.csv'))
+
+zwe <- read.csv(file.path(folder, '..', 'results', 'final',
+                          'mri', 'zimbabwe', 'ZWE_malaria_risk_index_yearly.csv'))
+
+zmb <- read.csv(file.path(folder, '..', 'results', 'final',
+                          'mri', 'ZMB_malaria_risk_index.csv'))
 
 federated_results$client = factor(
   federated_results$client,
@@ -150,7 +161,7 @@ spectrum_df$regime = factor(
   spectrum_df$regime,
   levels = c("climatology", "local", "transfer", "fedavg", "centralised"),
   labels = c('Climatology \n(baseline)', 'Local \n(No Sharing)', 
-             'Transfer \nLearning', 'Federated', 'Centralised \n(pool data)')
+             'Transfer \nLearning', 'Federated', 'Centralized \n(pool data)')
 )
 
 client_levels <- c("Uganda", "Zimbabwe", "Zambia")
@@ -186,7 +197,7 @@ regime_order  <- c("climatology", "local", "transfer",
                    "fedavg_uniform", "fedavg_sample", "centralised")
 regime_labels <- c("Climatology\n(baseline)", "Local\n(No Sharing)",
                    "Transfer\n(avg. across sources)", "FedAvg\n(uniform)",
-                   "FedAvg\n(sample-wt)", "Centralised\n(pool data)")
+                   "FedAvg\n(sample-wt)", "Centralized\n(pool data)")
 
 agg <- agg %>%
   mutate(regime_label = factor(regime_label, levels = regime_order,
@@ -378,5 +389,150 @@ dir.create(file.path(folder, 'figures'), showWarnings = FALSE)
 path = file.path(folder, 'figures', 'performance.png')
 png(path, units = "in", width = 7, height = 7, res = 480)
 print(all)
+dev.off()
+
+################
+##### MAPS #####
+################
+uga <- uga[uga$year == 2020, ]
+zwe <- zwe[zwe$year == 2020, ]
+zmb <- zmb[zmb$year == 2020, ]
+national_shp_uga <- st_read(file.path(folder, '..', 'data', 'raw', 'shapefiles',
+                                      'uga.shp'))
+ug_data <- st_read(file.path(folder, '..', 'data', 'raw', 'shapefiles',
+                             'gadm41_UGA_2.shp'))
+national_shp_zwe = st_read(file.path(folder, '..', 'data', 'raw', 'shapefiles', 
+                                 'gadm41_ZWE_0.shp'))
+zwe_data <- st_read(file.path(folder, '..', 'data', 'raw', 'shapefiles', 
+                              'gadm41_ZWE_2.shp'))
+national_shp_zmb = st_read(file.path(folder, '..', 'data', 'raw', 'shapefiles', 
+                                     'gadm41_ZMB_0.shp'))
+zmb_data <- st_read(file.path(folder, '..', 'data', 'raw', 'shapefiles', 
+                              'gadm41_ZMB_2.shp'))
+
+################
+#### Uganda ####
+################
+uga_sf <- st_as_sf(uga, coords = c("longitude", "latitude"), crs = 4326)
+ug_data <- st_transform(ug_data, st_crs(uga_sf))
+joined <- st_join(uga_sf, ug_data, join = st_within)
+
+mri_summary <- joined %>%
+  st_drop_geometry() %>%
+  group_by(GID_2) %>%             
+  summarise(mri_value = mean(mri_value, na.rm = TRUE))
+
+ug_data_mri <- ug_data %>%
+  left_join(mri_summary, by = "GID_2")
+
+uganda_mri <- ggplot() + 
+  geom_sf(data = national_shp_uga, fill = NA, color = "black", linewidth = 0.3) +
+  geom_sf(data = ug_data_mri, aes(fill = mri_value), color = NA) +
+  labs(title    = "Derived 2020 Malaria Risk Index (MRI).",
+       subtitle = "(A) Uganda") +
+  scale_fill_viridis_c(name = "MRI", option = "viridis") +
+  theme_minimal() +
+  theme(legend.position = 'bottom',
+        plot.margin = margin(0, 0, 0, 0),              
+        plot.title = element_text(size = 9, face = "bold"),
+        plot.subtitle = element_text(size = 7),
+        axis.title.y = element_text(size = 7),
+        axis.title.x = element_text(size = 7),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(size = 6),
+        axis.text.x = element_text(size = 6),
+        axis.text.y = element_text(size = 6),
+        axis.line.x  = element_line(size = 0.15),
+        axis.line.y  = element_line(size = 0.15),
+        legend.title = element_text(size = 6),
+        legend.text = element_text(size = 6)) 
+
+##################
+#### Zimbabwe ####
+##################
+zwe_sf <- st_as_sf(zwe, coords = c("longitude", "latitude"), crs = 4326)
+zwe_data <- st_transform(zwe_data, st_crs(zwe_sf))
+zwe_joined <- st_join(zwe_sf, zwe_data, join = st_within)
+
+zwe_mri_summary <- zwe_joined %>%
+  st_drop_geometry() %>%
+  group_by(GID_2) %>%             
+  summarise(mri_value = mean(mri_value, na.rm = TRUE))
+
+zwe_data_mri <- zwe_data %>%
+  left_join(zwe_mri_summary, by = "GID_2")
+
+zimbabwe_mri <- ggplot() + 
+  geom_sf(data = national_shp_zwe, fill = NA, color = "black", linewidth = 0.3) +
+  geom_sf(data = zwe_data_mri, aes(fill = mri_value), color = NA) +
+  labs(title    = " ",
+       subtitle = "(B) Zimbabwe") +
+  scale_fill_viridis_c(name = "MRI", option = "viridis") +
+  theme_minimal() +
+  theme(legend.position = 'bottom',
+        plot.margin = margin(0, 0, 0, 0),              
+        plot.title = element_text(size = 9, face = "bold"),
+        plot.subtitle = element_text(size = 7),
+        axis.title.y = element_text(size = 7),
+        axis.title.x = element_text(size = 7),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(size = 6),
+        axis.text.x = element_text(size = 6),
+        axis.text.y = element_text(size = 6),
+        axis.line.x  = element_line(size = 0.15),
+        axis.line.y  = element_line(size = 0.15),
+        legend.title = element_text(size = 6),
+        legend.text = element_text(size = 6)) 
+
+################
+#### Zambia ####
+################
+zmb_sf <- st_as_sf(zmb, coords = c("longitude", "latitude"), crs = 4326)
+zmb_data <- st_transform(zmb_data, st_crs(zmb_sf))
+zmb_joined <- st_join(zmb_sf, zmb_data, join = st_within)
+
+zmb_mri_summary <- zmb_joined %>%
+  st_drop_geometry() %>%
+  group_by(GID_2) %>%             
+  summarise(mri_value = mean(mri_value, na.rm = TRUE))
+
+zmb_data_mri <- zmb_data %>%
+  left_join(zmb_mri_summary, by = "GID_2")
+
+zambia_mri <- ggplot() + 
+  geom_sf(data = national_shp_zmb, fill = NA, color = "black", linewidth = 0.3) +
+  geom_sf(data = zmb_data_mri, aes(fill = mri_value), color = NA) +
+  labs(title    = " ",
+       subtitle = "(C) Zambia") +
+  scale_fill_viridis_c(name = "MRI", option = "viridis") +
+  theme_minimal() +
+  theme(legend.position = 'bottom',
+        plot.margin = margin(0, 0, 0, 0),              
+        plot.title = element_text(size = 9, face = "bold"),
+        plot.subtitle = element_text(size = 7),
+        axis.title.y = element_text(size = 7),
+        axis.title.x = element_text(size = 7),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(size = 6),
+        axis.text.x = element_text(size = 6),
+        axis.text.y = element_text(size = 6),
+        axis.line.x  = element_line(size = 0.15),
+        axis.line.y  = element_line(size = 0.15),
+        legend.title = element_text(size = 6),
+        legend.text = element_text(size = 6)) 
+
+maps <- ggarrange(uganda_mri, zimbabwe_mri, zambia_mri,align = "hv",
+                 ncol = 3,font.label = list(size = 9))
+
+dir.create(file.path(folder, 'figures'), showWarnings = FALSE)
+path = file.path(folder, 'figures', '3_mri_maps.png')
+png(path, units = "in", width = 7.5, height = 4, res = 480)
+print(maps)
 dev.off()
 
