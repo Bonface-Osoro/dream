@@ -22,6 +22,7 @@ VALIDATION = os.path.join(BASE_PATH, '..', 'results', 'processed', 'UGA_dhs', 'f
 COVARIATES = os.path.join(BASE_PATH, '..', 'results', 'final', 'ecological_predictors_with_mri.csv')
 SURV_COVARIATES = os.path.join(BASE_PATH, '..', 'results', 'processed', 'UGA_dhs', 'file6_UGA_malaria_annual_risk_covariates.csv')
 MONTHLY_COVARIATES = os.path.join(BASE_PATH, '..', 'results', 'processed', 'UGA_dhs', 'file7_UGA_malaria_monthly_risk_covariates.csv')
+VALIDATION_RESULTS = os.path.join(BASE_PATH, '..', 'results', 'final', 'UGA_dhs', 'UGA_mri_validation_results.csv')
 
 start = time.time()
 result_path = build_malaria_index_table(base_dir = DATA_RAW, 
@@ -32,6 +33,7 @@ build_risk_index(REFINED, RISK_INDEXED)
 merge_risk_with_outcome(RISK_INDEXED, REFINED, VALIDATION)
 build_survey_covariate_table(VALIDATION, COVARIATES, SURV_COVARIATES)
 build_monthly_risk_table(SURV_COVARIATES, MONTHLY_COVARIATES)
+validate_mri_categories(MONTHLY_COVARIATES, VALIDATION_RESULTS)
 elapsed = time.time() - start
  
-log.info("wrote %s in %.1fs", result_path, elapsed) 
+log.info("wrote %s in %.1fs", VALIDATION_RESULTS, elapsed) 
