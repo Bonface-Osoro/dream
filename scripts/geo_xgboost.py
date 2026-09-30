@@ -10,12 +10,15 @@ warnings.filterwarnings('ignore')
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.join(os.path.dirname(__file__), 'script_config.ini'))
 BASE_PATH = CONFIG['file_locations']['base_path']
-
+DATA_PROCESSED = os.path.join(BASE_PATH, '..', 'results', 'processed')
 DATA_RESULTS = os.path.join(BASE_PATH, '..', 'results', 'final')
 
+DATA_UGA_PRO = os.path.join(DATA_PROCESSED, 'UGA_dhs')
+DATA_UGA_RES = os.path.join(DATA_RESULTS, 'UGA_dhs')
 
-mri_data = os.path.join(DATA_RESULTS, 'mri', 'malaria_risk_index_monthly.csv')
-model_path = os.path.join(DATA_RESULTS, 'xgboost')
+
+mri_data = os.path.join(DATA_UGA_PRO, 'file7_UGA_malaria_monthly_risk_covariates.csv')
+model_path = os.path.join(DATA_UGA_RES, 'xgboost', 'UGA_dhs')
 df = xg_load_and_prepare_data(mri_data, 6)
 
 lagged_features = ['ndvi', 'precipitation_mm', 'temperature_C', 'elevation_m',
