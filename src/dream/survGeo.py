@@ -40,7 +40,7 @@ SURVEY_COLUMNS = [
 ]
 
 COVARIATE_COLUMNS = [
-    'year', 'longitude', 'latitude', 'ndvi', 'month', 'elevation_m',
+    'year', 'longitude', 'latitude', 'ndvi', 'month', 
     'precipitation_mm', 'temperature_C',
 ]
 
@@ -1026,3 +1026,86 @@ def validate_mri_categories(
 
 
     return result
+
+
+def _first_survey_year(label: str) -> int:
+    """
+    Read the first year out of a survey round label:
+ 
+    Parameters
+    ----------
+    label : str.
+        A round label such as '2009' or '2014-15'.
+ 
+    Returns
+    -------
+    result : int
+            The year before the dash, or the whole label as a year
+            when there is no dash, for example 2014 for '2014-15'.
+            Raises ValueError when that part is not a 4-digit year.
+ 
+    """
+    text = str(label).strip()
+    start, _, _ = text.partition('-')
+    if len(start) != 4 or not start.isdigit():
+        raise ValueError(f'cannot read a survey year from {label!r}')
+    return int(start)
+ 
+
+def split_by_survey_year(
+    input_csv: str,
+    output_dir: str,
+    round_col: str = 'survey_round',
+    overwrite: bool = False,
+) -> list[str]:
+    """
+    Split a table into one CSV per survey year:
+ 
+    Parameters
+    ----------
+    input_csv : str.
+        Path of a CSV holding round_col, for example the output of
+        build_risk_index.
+    output_dir : str.
+        Folder the per-year CSV files are written to.
+    round_col : str.
+        Name of the survey round column, holding labels such as
+        '2009' or '2014-15'. The year used is the one before the
+        dash, so '2014-15' becomes 2014, not 2015.
+    overwrite : bool.
+        When False, a per-year file already present in output_dir is
+        left as is and not regenerated. When True, it is
+        regenerated.
+ 
+    Returns
+    -------
+    result : list[str]
+            Paths of the per-year CSV files present in output_dir
+            after the call, one per distinct year found in round_col,
+            named <input file name>_<year>.csv. Every row of
+            input_csv is written to exactly one file, and the row
+            count of each file written this call is logged.
+ 
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+ 
+    df = pd.read_csv(input_csv, low_memory=False)
+    _require_columns(df, [round_col], input_csv)
+ 
+    year = df[round_col].astype(str).map(_first_survey_year)
+ 
+    stem = Path(input_csv).stem
+    written = []
+    for survey_year, rows in df.groupby(year):
+        out_path = output_path / f'{stem}_{survey_year}.csv'
+        if out_path.exists() and not overwrite:
+            log.info('%s already present, nothing to do', out_path)
+            written.append(str(out_path))
+            continue
+ 
+        rows.to_csv(out_path, index=False)
+        log.info('wrote %s with %s row(s)', out_path, len(rows))
+        written.append(str(out_path))
+ 
+    return written

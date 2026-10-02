@@ -15,7 +15,7 @@ folder <- dirname(rstudioapi::getSourceEditorContext()$path)
 ## 1. XGBOOST SHAP SUMMARY ##
 #############################
 shap_file <- read.csv(file.path(folder, '..', 'results', 'final', 
-                               'xgboost', 'lagged_shap_values_full.csv'))
+                               'xgboost', 'UGA_dhs', 'lagged_shap_values_full.csv'))
 
 shap_cols <- c("ndvi", "precipitation_mm", "temperature_C",
                "elevation_m", "month_sin", "month_cos",
