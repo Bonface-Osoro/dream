@@ -19,9 +19,10 @@ import numpy as np
 import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
+from pathlib import Path
 from scipy.special import expit, logit
+from scipy.stats import norm
 from sklearn.neighbors import BallTree
-from tqdm import tqdm
 from typing import NamedTuple
 
 log = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ SURVEY_COLUMNS = [
 ]
 
 COVARIATE_COLUMNS = [
-    'year', 'longitude', 'latitude', 'ndvi', 'month', 'elevation_m',
+    'year', 'longitude', 'latitude', 'ndvi', 'month', 
     'precipitation_mm', 'temperature_C',
 ]
 
@@ -886,3 +887,225 @@ def build_monthly_risk_table(
         output_path, len(result), result.shape[1],
     )
     return output_path
+
+
+def _calculate_wilson_interval(positive: int,
+    total: int, confidence: float = 0.95,) -> tuple[float, float]:
+    """Calculate a Wilson confidence interval for a binomial proportion."""
+
+    if total == 0:
+
+        return np.nan, np.nan
+
+    z_score = norm.ppf(1 - (1 - confidence) / 2)
+    proportion = positive / total
+    denominator = 1 + (z_score**2 / total)
+    centre = (proportion + (z_score**2 / (2 * total))) / denominator
+    margin = (z_score * np.sqrt((proportion * (1 - proportion) / total)
+            + (z_score**2 / (4 * total**2))) / denominator)
+    lower = max(0.0, centre - margin)
+    upper = min(1.0, centre + margin)
+
+    return lower, upper
+
+
+def validate_mri_categories(
+    input_csv: str,
+    output_csv: str,
+    category_col: str = 'malaria_risk_category',
+    rdt_col: str = 'malaria_rdt_result',
+    confidence: float = 0.95,
+    overwrite: bool = False,
+) -> pd.DataFrame:
+    """
+    Compare each risk category to the real RDT result, with a Wilson
+    confidence interval on each category's positivity rate:
+ 
+    Parameters
+    ----------
+    input_csv : str.
+        Path of a CSV holding category_col and rdt_col, for example
+        the output of build_monthly_risk_table.
+    output_csv : str.
+        Path of the CSV file to write.
+    category_col : str.
+        Name of the risk category column.
+    rdt_col : str.
+        Name of the RDT result column. Only 0 (negative) and 1
+        (positive) count as a result.
+    confidence : float.
+        Confidence level of the Wilson interval, for example 0.95
+        for a 95% interval.
+    overwrite : bool.
+        When False and output_csv already exists, it is read back
+        and returned instead of being recomputed. When True, it is
+        regenerated.
+ 
+    Returns
+    -------
+    result : pd.DataFrame
+            One row per category in RISK_CATEGORIES, in risk order,
+            with the count tested, the count and share RDT-positive,
+            the Wilson interval on that share, and the risk ratio
+            against the lowest risk category. 
+ 
+    """
+    output_path = Path(output_csv)
+    if output_path.exists() and not overwrite:
+
+        log.info('%s already present, reading it back', output_path)
+        return pd.read_csv(output_path)
+ 
+    output_path.parent.mkdir(parents = True, exist_ok = True)
+    df = pd.read_csv(input_csv, low_memory =False)
+    _require_columns(df, [category_col, rdt_col], input_csv)
+ 
+    rdt = pd.to_numeric(df[rdt_col], errors = 'coerce')
+    non_numeric = df[rdt_col].notna() & rdt.isna()
+    if non_numeric.any():
+
+        log.info('%s row(s) have a non-numeric %s value and are excluded',
+            int(non_numeric.sum()), rdt_col)
+ 
+    non_binary = rdt.notna() & ~rdt.isin([0, 1])
+    if non_binary.any():
+
+        codes = sorted(rdt.loc[non_binary].unique().tolist())
+        log.info('%s row(s) have a non-binary %s code and are excluded, '
+            'the same as a missing result: %s',
+            int(non_binary.sum()), rdt_col, codes)
+        rdt = rdt.where(~non_binary)
+ 
+    valid = df.loc[rdt.notna()].copy()
+    valid['rdt'] = rdt.loc[valid.index].astype(int)
+    log.info('%s of %s row(s) have a valid RDT result', len(valid), len(df))
+ 
+    rows = []
+    for category in RISK_CATEGORIES:
+
+        in_category = valid.loc[valid[category_col] == category, 'rdt']
+        n_total = len(in_category)
+        n_positive = int((in_category == 1).sum())
+        n_negative = n_total - n_positive
+ 
+        if n_total == 0:
+
+            log.warning('no valid RDT result for category %r', category)
+            positivity_pct = np.nan
+            ci_lower_pct = np.nan
+            ci_upper_pct = np.nan
+
+        else:
+
+            ci_lower, ci_upper = _calculate_wilson_interval(
+                n_positive, n_total, confidence)
+            positivity_pct = n_positive / n_total * 100
+            ci_lower_pct = ci_lower * 100
+            ci_upper_pct = ci_upper * 100
+ 
+        rows.append({'risk_category': category, 'n_tested': n_total,
+            'rdt_positive': n_positive, 'rdt_negative': n_negative,
+            'positivity_pct': positivity_pct, 'ci_lower_pct': ci_lower_pct,
+            'ci_upper_pct': ci_upper_pct})
+ 
+    result = pd.DataFrame(rows)
+    baseline_pct = result.loc[result['risk_category'] == RISK_CATEGORIES[0], 
+                              'positivity_pct'].iloc[0]
+    if pd.isna(baseline_pct) or baseline_pct == 0:
+
+        log.warning('the lowest risk category, %r, has no valid RDT result or '
+            'zero positives, so risk_ratio_vs_lowest cannot be '
+            'computed', RISK_CATEGORIES[0])
+        result['risk_ratio_vs_lowest'] = np.nan
+    else:
+
+        result['risk_ratio_vs_lowest'] = (result['positivity_pct'] / baseline_pct)
+ 
+    result.to_csv(output_path, index = False)
+    log.info('wrote %s with %s row(s)', output_path, len(result))
+
+
+    return result
+
+
+def _first_survey_year(label: str) -> int:
+    """
+    Read the first year out of a survey round label:
+ 
+    Parameters
+    ----------
+    label : str.
+        A round label such as '2009' or '2014-15'.
+ 
+    Returns
+    -------
+    result : int
+            The year before the dash, or the whole label as a year
+            when there is no dash, for example 2014 for '2014-15'.
+            Raises ValueError when that part is not a 4-digit year.
+ 
+    """
+    text = str(label).strip()
+    start, _, _ = text.partition('-')
+    if len(start) != 4 or not start.isdigit():
+        raise ValueError(f'cannot read a survey year from {label!r}')
+    return int(start)
+ 
+
+def split_by_survey_year(
+    input_csv: str,
+    output_dir: str,
+    round_col: str = 'survey_round',
+    overwrite: bool = False,
+) -> list[str]:
+    """
+    Split a table into one CSV per survey year:
+ 
+    Parameters
+    ----------
+    input_csv : str.
+        Path of a CSV holding round_col, for example the output of
+        build_risk_index.
+    output_dir : str.
+        Folder the per-year CSV files are written to.
+    round_col : str.
+        Name of the survey round column, holding labels such as
+        '2009' or '2014-15'. The year used is the one before the
+        dash, so '2014-15' becomes 2014, not 2015.
+    overwrite : bool.
+        When False, a per-year file already present in output_dir is
+        left as is and not regenerated. When True, it is
+        regenerated.
+ 
+    Returns
+    -------
+    result : list[str]
+            Paths of the per-year CSV files present in output_dir
+            after the call, one per distinct year found in round_col,
+            named <input file name>_<year>.csv. Every row of
+            input_csv is written to exactly one file, and the row
+            count of each file written this call is logged.
+ 
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+ 
+    df = pd.read_csv(input_csv, low_memory=False)
+    _require_columns(df, [round_col], input_csv)
+ 
+    year = df[round_col].astype(str).map(_first_survey_year)
+ 
+    stem = Path(input_csv).stem
+    written = []
+    for survey_year, rows in df.groupby(year):
+        out_path = output_path / f'{stem}_{survey_year}.csv'
+        if out_path.exists() and not overwrite:
+            log.info('%s already present, nothing to do', out_path)
+            written.append(str(out_path))
+            continue
+ 
+        rows.to_csv(out_path, index=False)
+        log.info('wrote %s with %s row(s)', out_path, len(rows))
+        written.append(str(out_path))
+ 
+    return written

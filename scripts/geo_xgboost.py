@@ -14,12 +14,10 @@ DATA_PROCESSED = os.path.join(BASE_PATH, '..', 'results', 'processed')
 DATA_RESULTS = os.path.join(BASE_PATH, '..', 'results', 'final')
 
 DATA_UGA_PRO = os.path.join(DATA_PROCESSED, 'UGA_dhs')
-DATA_UGA_RES = os.path.join(DATA_RESULTS, 'UGA_dhs')
-
 
 mri_data = os.path.join(DATA_UGA_PRO, 'file7_UGA_malaria_monthly_risk_covariates.csv')
-model_path = os.path.join(DATA_UGA_RES, 'xgboost', 'UGA_dhs')
-df = xg_load_and_prepare_data(mri_data, 6)
+model_path = os.path.join(DATA_RESULTS, 'xgboost', 'UGA_dhs')
+df = xg_load_and_prepare_data(mri_data, 6) 
 
 lagged_features = ['ndvi', 'precipitation_mm', 'temperature_C', 'elevation_m',
     'month_sin', 'month_cos','mri_lag3', 'mri_lag6', 'mri_lag12',
@@ -39,6 +37,8 @@ save_per_location_xg_metrics(pred_by_loc, model_path)
 xg_sanity_checks(y_test.values, y_pred)
 plot_xg_predictions(pred_by_loc, model_path, 3, False)
 
-export_shap_values(model, X_train, X_test, non_lagged_features, model_path)
-export_shap_per_location(model, X_train, X_test, non_lagged_features, locations_test, model_path)
-explain_xgboost(model, X_train, X_test, non_lagged_features, model_path)
+export_shap_values(model, X_train, X_test, list(X_test.columns), model_path)
+#export_shap_values(model, X_train, X_test, non_lagged_features, model_path)
+export_shap_per_location(model, X_train, X_test, list(X_test.columns), locations_test, model_path)
+#export_shap_per_location(model, X_train, X_test, non_lagged_features, locations_test, model_path)
+explain_xgboost(model, X_train, X_test, list(X_test.columns), model_path)
