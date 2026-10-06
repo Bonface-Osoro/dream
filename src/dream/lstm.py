@@ -58,6 +58,10 @@ def lstm_create_sequences(df, features, target, look_back, horizon = 1):
 def lstm_load_and_prepare(csv_path):
     """
     Loads and prepares the malaria dataset for modeling.
+    The file holds one row per child and month, but the children at one
+    point share the raster values, so the rows are reduced to one per
+    point (longitude, latitude), year, and month, taking the mean risk
+    of the children at that point. Each point has one year of 12 months.
     Parameters:
     ----------
         csv_path : str
@@ -65,18 +69,36 @@ def lstm_load_and_prepare(csv_path):
     Returns:
     -------
         df : dataframe
-            The loaded and prepared dataset.
+            One row per point and month, sorted by point, year, and
+            month, without the January rows that have no lag.
     """
     print("Loading and preparing data...")
 
     df = pd.read_csv(csv_path)
 
+    keys = ['longitude', 'latitude', 'year', 'month_num']
+    covariates = ['ndvi', 'precipitation_mm', 'temperature_C', 'elevation_m']
+
+    spread = df.groupby(keys)[covariates].nunique()
+    if (spread > 1).to_numpy().any():
+        raise ValueError(
+            'a covariate has more than one value at one point and month'
+        )
+
+    df = df.groupby(keys, as_index=False)[covariates + ['monthly_mri']].mean()
+    df = df.sort_values(keys).reset_index(drop=True)
+
     df['month_sin'] = np.sin(2 * np.pi * df['month_num'] / 12)
     df['month_cos'] = np.cos(2 * np.pi * df['month_num'] / 12)
 
-    df['mri_lag1'] = df.groupby(['longitude','latitude'])['monthly_mri'].shift(1)
+    # The lag stays inside one point and year, so January has none.
+    df['mri_lag1'] = df.groupby(
+        ['longitude', 'latitude', 'year']
+    )['monthly_mri'].shift(1)
 
-    df = df.dropna().reset_index(drop = True)
+    df = df.dropna().reset_index(drop=True)
+    print(f"{len(df)} point-month rows at "
+          f"{df[['longitude', 'latitude']].drop_duplicates().shape[0]} points")
 
     return df
 
@@ -103,6 +125,11 @@ def lstm_split_data(df, split_year):
 
 def lstm_scale_features(train_df, test_df, features):
     """Scales the features in the training and testing datasets using MinMaxScaler.
+    One scaler is fitted on the training rows of all points and applied to
+    both sets. A scaler per point cannot be used here, because every point
+    has one year of data, so a test point never has a training scaler, and
+    a feature that is constant within a point, such as elevation, would
+    be scaled to 0 everywhere.
     Parameters:
     ----------
         train_df : dataframe
@@ -119,35 +146,25 @@ def lstm_scale_features(train_df, test_df, features):
         test_scaled : dataframe
             The testing set with scaled features.
     """
-    print("Scaling features per location (train only)...")
+    if train_df.empty or test_df.empty:
+        raise ValueError(
+            f"the split left {len(train_df)} training row(s) and "
+            f"{len(test_df)} test row(s); the split year must fall "
+            f"between the first and last year in the data"
+        )
 
-    scalers_X = {}
-    scaled_train = []
-    scaled_test = []
+    print("Scaling features (train only)...")
 
-    for (lon, lat), group in train_df.groupby(['longitude', 'latitude']):
+    sort_cols = ['longitude', 'latitude', 'year', 'month_num']
+    train_scaled = train_df.sort_values(sort_cols).reset_index(drop=True)
+    test_scaled = test_df.sort_values(sort_cols).reset_index(drop=True)
 
-        group = group.sort_values(['year','month_num']).copy()
-        scaler = MinMaxScaler()
-        group[features] = scaler.fit_transform(group[features])
-        scalers_X[(lon, lat)] = scaler
-        scaled_train.append(group)
-
-    train_scaled = pd.concat(scaled_train).reset_index(drop = True)
+    scaler = MinMaxScaler()
+    train_scaled[features] = scaler.fit_transform(train_scaled[features])
 
     print("Applying same scaling to test set...")
 
-    for (lon, lat), group in test_df.groupby(['longitude', 'latitude']):
-
-        group = group.sort_values(['year','month_num']).copy()
-
-        if (lon, lat) in scalers_X:
-
-            scaler = scalers_X[(lon, lat)]
-            group[features] = scaler.transform(group[features])
-            scaled_test.append(group)
-
-    test_scaled = pd.concat(scaled_test).reset_index(drop = True)
+    test_scaled[features] = scaler.transform(test_scaled[features])
 
     return train_scaled, test_scaled
 
