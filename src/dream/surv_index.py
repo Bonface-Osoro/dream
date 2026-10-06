@@ -1083,14 +1083,7 @@ def merge_risk_with_outcome(
             not mother_caseid, since a mother with more than one
             surveyed child under 5 shares one mother_caseid across
             several rows and would otherwise produce a many-to-many
-            join. A row whose key has no match in refined_path,
-            which is not expected since risk_path is normally built
-            from refined_path, has the outcome column(s) as missing
-            and is counted in a warning naming the true join failure.
-            A row that does join successfully but whose child was
-            simply never tested, so the outcome itself is genuinely
-            absent, is counted separately at info level, since that
-            is expected survey coverage, not a join problem.
+            join.
  
     """
     output_path = os.path.abspath(output_path)
