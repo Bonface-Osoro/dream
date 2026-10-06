@@ -11,10 +11,10 @@ folder <- dirname(rstudioapi::getSourceEditorContext()$path)
 ##############################
 
 xgb  <- read.csv(file.path(folder, '..', 'results', 'final',
-                           'xgboost', 'xgb_training_log.csv'))
+                           'xgboost', 'UGA_dhs', 'xgb_training_log.csv'))
 
 lstm <- read.csv(file.path(folder, '..', 'results', 'final',
-                           'lstm', 'lstm_training_log.csv'))
+                           'lstm', 'UGA_dhs', 'lstm_training_log.csv'))
 
 xgb_long <- xgb %>%
   rename(step = Iteration) %>%
@@ -73,17 +73,17 @@ train_plots <- ggplot(df, aes(x = step, y = RMSE, colour = series)) +
 ## 2. MODEL TEST METRICS ##
 ###########################
 xgb_metrics  <- read.csv(file.path(folder, '..', 'results', 'final', 'xgboost',
-                                   'xg_test_metrics.csv'))  %>%
+                                   'UGA_dhs', 'xg_test_metrics.csv'))  %>%
   filter(Metric %in% c("R2", "RMSE", "MAE")) %>%
   mutate(model = "XGBoost")
 
 lstm_metrics <- read.csv(file.path(folder, '..', 'results', 'final', 'lstm', 
-                                   'lstm_test_metrics.csv')) %>%
+                                   'UGA_dhs', 'lstm_test_metrics.csv')) %>%
   filter(Metric %in% c("R2", "RMSE", "MAE")) %>%
   mutate(Value = as.numeric(Value), model = "LSTM")
 
 xgb_mse <- read.csv(file.path(folder, '..', 'results', 'final', 'xgboost',
-                              'xg_test_metrics.csv')) %>%
+                              'UGA_dhs', 'xg_test_metrics.csv')) %>%
   filter(Metric == "MSE") %>% pull(Value)
 
 xgb_metrics <- bind_rows(
@@ -92,7 +92,7 @@ xgb_metrics <- bind_rows(
 ) %>% filter(Metric != "MSE")
 
 lstm_mse <- read.csv(file.path(folder, '..', 'results', 'final', 'lstm', 
-                               'lstm_test_metrics.csv')) %>%
+                               'UGA_dhs', 'lstm_test_metrics.csv')) %>%
   filter(Metric == "MSE") %>% 
   mutate(Value = as.numeric(Value)) %>%
   pull(Value)
@@ -151,18 +151,7 @@ combined <- combined +
   )
 
 
-output_path = file.path(folder, 'figures', 'train_1_plots.png')
+output_path = file.path(folder, 'figures', '3_train_1_plots.png')
 ggsave(filename = output_path, plot = combined,
        width = 5, height = 5, dpi = 720, bg = "white")
-
-
-
-
-
-
-
-
-
-
-
 

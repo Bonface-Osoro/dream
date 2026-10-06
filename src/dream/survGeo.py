@@ -1,14 +1,15 @@
 """
 Role: Attach monthly environmental covariates to the scored survey
 table.
-Description: Renames each survey round to its latest year, drops rows
-with coordinates of 0, 0, and drops the mri_value covariate column
-when present. Matches every child to the nearest covariate grid point
-among the points that hold the covariate year, then joins that point's
-monthly rows. The covariate year is the survey year, or the nearest
-year in the covariates when the file lacks it. A child with no point
-inside the radius keeps its nearest point, so no row is lost. Writes
-one CSV in long form, one row per child and month.
+Description: Joins the scored survey table to the monthly covariate
+table on the child identifiers, cluster_number, household_number,
+hvidx, and survey_round, so each child receives its own twelve
+monthly rows. The coordinates in the two tables come from the same
+points and are checked to agree, not used to match. Rows with
+coordinates of 0, 0 are dropped, mri_value is dropped from the
+covariates when present, and each survey round is renamed to its
+first year. Writes one CSV in long form, one row per child and
+month.
 Author: Bonny
 """
 
@@ -22,12 +23,11 @@ import pytensor.tensor as pt
 from pathlib import Path
 from scipy.special import expit, logit
 from scipy.stats import norm
-from sklearn.neighbors import BallTree
 from typing import NamedTuple
 
 log = logging.getLogger(__name__)
 
-EARTH_RADIUS_KM = 6371.0088
+COORDINATE_TOLERANCE_DEG = 1e-6
 
 # Cluster and household numbers restart each survey round, so a child is
 # identified by all four columns together.
@@ -94,94 +94,38 @@ def _require_columns(
         raise ValueError(f'{name} has no {missing} column(s)')
 
 
-def _latest_survey_year(label: str) -> int:
-    """
-    This is a helper function to read the latest year out of a survey round label:
-
-    Parameters
-    ----------
-    label : str.
-        A round label such as '2009' or '2014-15'.
-
-    Returns
-    -------
-    result : int
-            The latest year in the label, for example 2015 for
-            '2014-15'. .
-
-    """
-    text = str(label).strip()
-    start, _, end = text.partition('-')
-    valid_start = len(start) == 4 and start.isdigit()
-    valid_end = end == '' or (len(end) == 2 and end.isdigit())
-    if not (valid_start and valid_end):
-
-        raise ValueError(f'cannot read a survey year from {label!r}')
-
-    year = int(start)
-    if end == '':
-
-        return year
-    latest = year - year % 100 + int(end)
-    if latest < year:
-
-        latest += 100
-
-
-    return latest
-
-
-def _pick_covariate_year(
-    survey_year: int, available_years: list[int]
-) -> int:
-    """
-    This is a helper function to choose the 
-    covariate year to use for a survey year:
-
-    Parameters
-    ----------
-    survey_year : int.
-        Latest year of the survey round.
-    available_years : list[int].
-        Years present in the covariate file, in ascending order.
-
-    Returns
-    -------
-    result : int
-            survey_year when the covariates hold it..
-
-    """
-    if survey_year in available_years:
-
-        return survey_year
-    
-    return min(available_years, key=lambda year: abs(year - survey_year))
-
-
 def prepare_data(
     survey: pd.DataFrame, covariates: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    This function cleans the survey and covariate 
-    tables before matching:
+    Clean the survey and covariate tables before matching:
 
     Parameters
     ----------
     survey : pd.DataFrame.
         The scored survey table, one row per child.
     covariates : pd.DataFrame.
-        The monthly covariate table, one row per point and month.
+        The monthly covariate table, one row per child and month.
 
     Returns
     -------
     result : tuple[pd.DataFrame, pd.DataFrame]
-            The survey table and the covariate table. .
+            The survey table and the covariate table. Rows of the
+            survey table with LATNUM and LONGNUM both 0 are dropped
+            and counted in the log. survey_round is read as text in
+            both tables, so a table holding one round whose label
+            looks like a number still joins to the other. The
+            mri_value column is dropped from the covariates when
+            present. Raises ValueError when a child appears more
+            than once in the survey table, or a child and month more
+            than once in the covariate table, since the join would
+            then multiply rows.
 
     """
-    labels = survey['survey_round'].astype(str).unique()
-    years = {label: _latest_survey_year(label) for label in labels}
     survey = survey.copy()
-    survey['survey_round'] = survey['survey_round'].astype(str).map(years)
+    covariates = covariates.copy()
+    for table in (survey, covariates):
+        table['survey_round'] = table['survey_round'].astype(str)
 
     at_origin = (survey['LATNUM'] == 0) & (survey['LONGNUM'] == 0)
     if at_origin.any():
@@ -195,149 +139,89 @@ def prepare_data(
         log.info('dropping mri_value from the covariates')
         covariates = covariates.drop(columns=['mri_value'])
 
-    available = sorted(int(year) for year in covariates['year'].unique())
-    if not available:
-        raise ValueError('the covariates hold no year')
-    survey['covariate_year'] = survey['survey_round'].map(
-        lambda year: _pick_covariate_year(year, available)
-    )
-
-    changed = survey[survey['survey_round'] != survey['covariate_year']]
-    pairs = changed.groupby(['survey_round', 'covariate_year']).size()
-    for (survey_year, used_year), count in pairs.items():
-        log.warning(
-            '%s row(s) of survey year %s use covariate year %s, the '
-            'nearest year in the covariates',
-            count, survey_year, used_year,
+    repeated = survey.duplicated(subset=CHILD_KEY)
+    if repeated.any():
+        raise ValueError(
+            f'{int(repeated.sum())} row(s) of the survey table repeat '
+            f'a child already seen, identified by {CHILD_KEY}'
+        )
+    repeated = covariates.duplicated(subset=CHILD_KEY + ['month'])
+    if repeated.any():
+        raise ValueError(
+            f'{int(repeated.sum())} row(s) of the covariate table '
+            f'repeat a child and month already seen, identified by '
+            f'{CHILD_KEY} and month'
         )
     return survey, covariates
 
 
-def find_nearest_points(
-    query: pd.DataFrame,
-    candidates: pd.DataFrame,
-    radius_km: float = 5.0,
-) -> pd.DataFrame:
-    """
-    This function finds the nearest candidate 
-    point for every query point:
-
-    Parameters
-    ----------
-    query : pd.DataFrame.
-        Columns latitude and longitude in degrees, one row per query
-        point.
-    candidates : pd.DataFrame.
-        Columns latitude and longitude in degrees, one row per
-        candidate point. Positions are counted from the first row.
-    radius_km : float.
-        Distance in kilometres used only to count and report the
-        query points that have no candidate inside it.
-
-    Returns
-    -------
-    result : pd.DataFrame
-            One row per query point, with the index of query, and the
-            columns nearest_latitude, nearest_longitude, and
-            distance_km.
-
-    """
-    for name, frame in (('query', query), ('candidates', candidates)):
-        if frame[['latitude', 'longitude']].isna().any().any():
-            raise ValueError(f'{name} has a missing latitude or longitude')
-    if candidates.empty:
-        raise ValueError('there are no candidate points to match against')
-
-    tree = BallTree(
-        np.radians(candidates[['latitude', 'longitude']].to_numpy()),
-        metric='haversine',
-    )
-    distance, position = tree.query(
-        np.radians(query[['latitude', 'longitude']].to_numpy()), k=1
-    )
-    distance_km = distance[:, 0] * EARTH_RADIUS_KM
-    nearest = candidates.iloc[position[:, 0]]
-
-    beyond = distance_km > radius_km
-    if beyond.any():
-        log.warning(
-            '%s of %s point(s) have no candidate within %s km and keep '
-            'their nearest one, up to %.1f km away',
-            int(beyond.sum()), len(query), radius_km, distance_km.max(),
-        )
-    return pd.DataFrame(
-        {
-            'nearest_latitude': nearest['latitude'].to_numpy(),
-            'nearest_longitude': nearest['longitude'].to_numpy(),
-            'distance_km': distance_km,
-        },
-        index=query.index,
-    )
-
-
 def merge_covariates(
-    survey: pd.DataFrame,
-    covariates: pd.DataFrame,
-    radius_km: float = 5.0,
+    survey: pd.DataFrame, covariates: pd.DataFrame
 ) -> pd.DataFrame:
     """
-    Join each child to the monthly covariates of its nearest point:
+    Join each child to its own monthly covariates:
 
     Parameters
     ----------
     survey : pd.DataFrame.
-        The survey table returned by prepare_data, with a
-        covariate_year column.
+        The survey table returned by prepare_data.
     covariates : pd.DataFrame.
         The covariate table returned by prepare_data.
-    radius_km : float.
-        Passed to find_nearest_points.
 
     Returns
     -------
     result : pd.DataFrame
-            One row per child and covariate month.
+            One row per child and month. The match is exact, on
+            CHILD_KEY, and no distance is involved. Raises
+            ValueError when a child has no row in the covariates, so
+            two files that are out of step fail here and not as a
+            shorter table, or when the survey coordinates and the
+            covariate coordinates of a matched child differ by more
+            than COORDINATE_TOLERANCE_DEG, since a child matched to
+            the wrong location would otherwise go unnoticed. A
+            missing covariate value is kept as missing and logged
+            as a warning.
 
     """
-    _require_columns(survey, ['covariate_year'], 'the survey table')
-
-    matched = []
-    for year, children in survey.groupby('covariate_year'):
-        in_year = covariates[covariates['year'] == year]
-        candidates = (
-            in_year[['latitude', 'longitude']]
-            .drop_duplicates()
-            .reset_index(drop=True)
-        )
-        log.info(
-            'covariate year %s: matching %s row(s) to %s point(s)',
-            year, len(children), len(candidates),
-        )
-        query = children[['LATNUM', 'LONGNUM']].rename(
-            columns={'LATNUM': 'latitude', 'LONGNUM': 'longitude'}
-        )
-        nearest = find_nearest_points(query, candidates, radius_km)
-        matched.append(children.join(nearest))
-    children = pd.concat(matched)
-
-    # The matched coordinates are copied from the covariate table, so the
-    # float keys are identical and the join needs no tolerance.
-    merged = children.merge(
-        covariates,
-        left_on=['covariate_year', 'nearest_latitude', 'nearest_longitude'],
-        right_on=['year', 'latitude', 'longitude'],
+    merged = survey.merge(
+        covariates[CHILD_KEY + COVARIATE_COLUMNS],
+        on=CHILD_KEY,
         how='left',
+        indicator=True,
+        validate='one_to_many',
     )
-    merged['month_num'] = _month_number(merged['month'])
-    unmatched = int(merged['year'].isna().sum())
+    unmatched = int((merged['_merge'] == 'left_only').sum())
     if unmatched:
-        raise ValueError(f'{unmatched} row(s) found no covariate row')
+        raise ValueError(
+            f'{unmatched} child(ren) of the survey table have no row '
+            'in the covariates'
+        )
+    merged = merged.drop(columns=['_merge'])
 
+    differs = (
+        (merged['LONGNUM'] - merged['longitude']).abs()
+        > COORDINATE_TOLERANCE_DEG
+    ) | (
+        (merged['LATNUM'] - merged['latitude']).abs()
+        > COORDINATE_TOLERANCE_DEG
+    )
+    if differs.any():
+        children = len(merged.loc[differs, CHILD_KEY].drop_duplicates())
+        raise ValueError(
+            f'{children} child(ren) have survey coordinates that '
+            f'differ from their covariate coordinates by more than '
+            f'{COORDINATE_TOLERANCE_DEG} degrees'
+        )
+
+    for column in ('ndvi', 'precipitation_mm', 'temperature_C'):
+        missing = int(merged[column].isna().sum())
+        if missing:
+            log.warning('%s row(s) have no %s value', missing, column)
+
+    merged['month_num'] = _month_number(merged['month'])
     log.info(
-        '%s child row(s) matched, distance to the point: median %.1f '
-        'km, maximum %.1f km',
-        len(children), children['distance_km'].median(),
-        children['distance_km'].max(),
+        '%s child(ren) matched exactly to %s monthly row(s)',
+        len(survey), len(merged),
     )
     return merged
 
@@ -346,58 +230,67 @@ def build_survey_covariate_table(
     survey_path: str,
     covariate_path: str,
     output_path: str,
-    radius_km: float = 5.0,
     overwrite: bool = False,
 ) -> str:
     """
     Write the survey table joined to its monthly covariates:
- 
+
     Parameters
     ----------
     survey_path : str.
         Path of the scored survey CSV, for example the output of
         merge_risk_with_outcome.
     covariate_path : str.
-        Path of the monthly covariate CSV.
+        Path of the monthly covariate CSV, one row per child and
+        month, with the same child identifiers as the survey CSV.
     output_path : str.
         Path of the CSV file to write.
-    radius_km : float.
-        Passed to find_nearest_points.
     overwrite : bool.
         When False and output_path already exists, the existing file
         is left as is and the inputs are not read again. When True,
         it is regenerated.
- 
+
     Returns
     -------
     result : str
-            output_path.
- 
+            output_path. The columns are FINAL_COLUMNS, one row per
+            child and month. survey_round holds the first year of
+            each round as an integer, for example 2014 for 2014-15,
+            the same year as the covariate rows in year.
+
     """
     output_path = os.path.abspath(output_path)
     if os.path.exists(output_path) and not overwrite:
         log.info('%s already present, nothing to do', output_path)
         return output_path
- 
+
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
- 
+
     survey = pd.read_csv(survey_path, low_memory=False)
     covariates = pd.read_csv(covariate_path, low_memory=False)
     _require_columns(survey, SURVEY_COLUMNS, survey_path)
-    _require_columns(covariates, COVARIATE_COLUMNS, covariate_path)
- 
+    _require_columns(
+        covariates, CHILD_KEY + COVARIATE_COLUMNS, covariate_path
+    )
+
     survey, covariates = prepare_data(survey, covariates)
-    merged = merge_covariates(survey, covariates, radius_km)
+    merged = merge_covariates(survey, covariates)
+
+    # The join needs the labels as they are in both files. The rename
+    # to the first year comes after it.
+    merged['survey_round'] = merged['survey_round'].map(
+        _first_survey_year
+    )
     result = merged[FINAL_COLUMNS]
- 
+
     result.to_csv(output_path, index=False)
     log.info(
         'wrote %s with %s row(s) and %s column(s)',
         output_path, len(result), result.shape[1],
     )
     return output_path
- 
- 
+
+
 class YearData(NamedTuple):
     """
     The arrays the state space model needs for one survey year:

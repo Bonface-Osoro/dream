@@ -12,12 +12,12 @@ nation_shp_path <- file.path(folder, '..', 'data', 'raw', 'shapefiles',
                              'gadm41_UGA_0.shp')
 region_shp_path <- file.path(folder, '..', 'data', 'raw', 'shapefiles',
                              'gadm41_UGA_2.shp')
-mri_csv_path    <- file.path(folder, '..', 'results', 'final',
-                             'region_2_year_mri.csv')
+mri_csv_path    <- file.path(folder, '..', 'results', 'final', 'UGA_dhs',
+                             'UGA_GID2_dhs_risk_scores.csv')
 output_gif      <- file.path(folder, 'figures', 'UGA_mri_timelapse.gif')
 
-YEARS      <- 2000:2020
-FPS        <- 15          # frames per second (lower = slower, higher = faster)
+YEARS      <- 2008:2025
+FPS        <- 10          # frames per second (lower = slower, higher = faster)
 PAUSE_END  <- 2          # extra pause on final frame (in frames)
 WIDTH_PX   <- 800
 HEIGHT_PX  <- 700
