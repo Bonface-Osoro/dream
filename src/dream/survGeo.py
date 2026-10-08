@@ -33,6 +33,9 @@ COORDINATE_TOLERANCE_DEG = 1e-6
 # identified by all four columns together.
 CHILD_KEY = ['cluster_number', 'household_number', 'hvidx', 'survey_round']
 
+# What prepare_data does with a child that appears twice in the survey.
+SURVEY_REPEAT_POLICIES = ('raise', 'collapse')
+
 SURVEY_COLUMNS = [
     'cluster_number', 'household_number', 'hvidx', 'mother_caseid',
     'survey_round', 'LATNUM', 'LONGNUM', 'malaria_risk_score',
@@ -94,8 +97,72 @@ def _require_columns(
         raise ValueError(f'{name} has no {missing} column(s)')
 
 
+def _collapse_repeated_survey_children(
+    survey: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Keep one row for each child that appears more than once:
+
+    Parameters
+    ----------
+    survey : pd.DataFrame.
+        The scored survey table, with the CHILD_KEY columns and
+        mother_caseid.
+
+    Returns
+    -------
+    result : pd.DataFrame
+            The table with the first row kept for every child and
+            the later copies skipped. Copies of a child must agree
+            on every column except mother_caseid, as the risk score,
+            category, coordinates, and RDT result describe the same
+            child. When the copies disagree on mother_caseid, the
+            row kept has it set to missing, since choosing one would
+            be a guess. The rows skipped, and the children affected,
+            are logged as a warning. Raises ValueError when copies
+            disagree on any other column, naming the columns, since
+            skipping one would then discard real information.
+
+    """
+    repeated = survey.duplicated(subset=CHILD_KEY, keep=False)
+    if not repeated.any():
+        return survey
+
+    others = [
+        c for c in survey.columns
+        if c not in CHILD_KEY and c != 'mother_caseid'
+    ]
+    copies = survey[repeated].groupby(CHILD_KEY)
+    spread = copies[others].nunique(dropna=False)
+    conflicting = (spread > 1).any(axis=1)
+    if conflicting.any():
+        columns = spread.columns[(spread[conflicting] > 1).any()].tolist()
+        raise ValueError(
+            f'{int(conflicting.sum())} repeated child(ren) have copies '
+            f'that disagree on {columns}'
+        )
+
+    mothers = copies['mother_caseid'].nunique(dropna=False)
+    ambiguous = mothers[mothers > 1].index
+    kept = survey.drop_duplicates(subset=CHILD_KEY, keep='first').copy()
+    unclear = kept.set_index(CHILD_KEY).index.isin(ambiguous)
+    kept.loc[unclear, 'mother_caseid'] = np.nan
+
+    affected = survey.loc[repeated, CHILD_KEY].drop_duplicates()
+    log.warning(
+        'skipped %s repeated row(s) of %s child(ren) in the survey '
+        'table; %s had copies with different mother_caseid, now set '
+        'to missing. First few: %s',
+        len(survey) - len(kept), len(affected), int(unclear.sum()),
+        affected.head(6).to_dict('records'),
+    )
+    return kept
+
+
 def prepare_data(
-    survey: pd.DataFrame, covariates: pd.DataFrame
+    survey: pd.DataFrame,
+    covariates: pd.DataFrame,
+    repeats: str = 'raise',
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Clean the survey and covariate tables before matching:
@@ -106,6 +173,11 @@ def prepare_data(
         The scored survey table, one row per child.
     covariates : pd.DataFrame.
         The monthly covariate table, one row per child and month.
+    repeats : str.
+        What to do when a child appears more than once in the
+        survey table. 'raise' stops with an error. 'collapse' keeps
+        the first copy and skips the others, with a warning, see
+        _collapse_repeated_survey_children.
 
     Returns
     -------
@@ -122,6 +194,12 @@ def prepare_data(
             then multiply rows.
 
     """
+    if repeats not in SURVEY_REPEAT_POLICIES:
+        raise ValueError(
+            f'repeats must be one of {SURVEY_REPEAT_POLICIES}, got '
+            f'{repeats!r}'
+        )
+
     survey = survey.copy()
     covariates = covariates.copy()
     for table in (survey, covariates):
@@ -139,11 +217,15 @@ def prepare_data(
         log.info('dropping mri_value from the covariates')
         covariates = covariates.drop(columns=['mri_value'])
 
+    if repeats == 'collapse':
+        survey = _collapse_repeated_survey_children(survey)
+
     repeated = survey.duplicated(subset=CHILD_KEY)
     if repeated.any():
         raise ValueError(
             f'{int(repeated.sum())} row(s) of the survey table repeat '
-            f'a child already seen, identified by {CHILD_KEY}'
+            f'a child already seen, identified by {CHILD_KEY} '
+            "(repeats='collapse' keeps one copy of each repeated child)"
         )
     repeated = covariates.duplicated(subset=CHILD_KEY + ['month'])
     if repeated.any():
@@ -231,6 +313,7 @@ def build_survey_covariate_table(
     covariate_path: str,
     output_path: str,
     overwrite: bool = False,
+    repeats: str = 'raise',
 ) -> str:
     """
     Write the survey table joined to its monthly covariates:
@@ -249,6 +332,9 @@ def build_survey_covariate_table(
         When False and output_path already exists, the existing file
         is left as is and the inputs are not read again. When True,
         it is regenerated.
+    repeats : str.
+        Passed to prepare_data: what to do when a child appears more
+        than once in the survey table, 'raise' or 'collapse'.
 
     Returns
     -------
@@ -273,7 +359,7 @@ def build_survey_covariate_table(
         covariates, CHILD_KEY + COVARIATE_COLUMNS, covariate_path
     )
 
-    survey, covariates = prepare_data(survey, covariates)
+    survey, covariates = prepare_data(survey, covariates, repeats)
     merged = merge_covariates(survey, covariates)
 
     # The join needs the labels as they are in both files. The rename
@@ -447,7 +533,14 @@ def build_state_space_model(data: YearData):
     """
     n_points, n_months, n_covariates = data.covariates.shape
     annual_covariates = data.covariates.mean(axis=1)
-    several = data.point_count >= 2
+    several = (data.point_count >= 2) & (data.point_spread > 0)
+    identical = int(((data.point_count >= 2) & ~several).sum())
+    if identical:
+        log.warning(
+            '%s location(s) have two or more children with identical '
+            'scores and are left out of the spread likelihood',
+            identical,
+        )
     with pm.Model() as model:
         intercept = pm.Normal(
             'intercept', mu=float(data.annual_logit.mean()), sigma=2.0
