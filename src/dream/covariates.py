@@ -1,6 +1,7 @@
 import os
 import glob
 import logging
+import numpy as np
 import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
@@ -45,6 +46,9 @@ FINAL_COLUMNS = [
 ]
 
 COORDINATE_TOLERANCE_DEG = 1e-6
+
+# What merge_monthly_covariates does with a child that appears twice.
+REPEAT_POLICIES = ('raise', 'collapse')
 
 
 def _parse_year_month(file_path: str) -> tuple[int, str]:
@@ -278,6 +282,75 @@ def _one_row_per_location_month(table: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _collapse_repeated_children(
+    df: pd.DataFrame, path: str, value_col: str
+) -> pd.DataFrame:
+    """
+    Keep one row for each child and month that appears more than once:
+
+    Parameters
+    ----------
+    df : pd.DataFrame.
+        One covariate table from combine_covariate_monthly.
+    path : str.
+        File the table came from, named in messages.
+    value_col : str.
+        Name of the covariate column in df.
+
+    Returns
+    -------
+    result : pd.DataFrame
+            The table with the first row kept for every child,
+            survey_round, year, and month, and the later copies
+            skipped. The covariates are read from a raster at the
+            child's location, so copies at the same location carry
+            the same values. When the copies of a child disagree on
+            mother_caseid, the row kept has it set to missing, since
+            choosing one would be a guess. The number of rows
+            skipped, and the children affected, are logged as a
+            warning. Raises ValueError when copies disagree on a
+            coordinate or on the covariate value, since skipping one
+            would then discard real information.
+
+    """
+    key = [
+        'cluster_number', 'household_number', 'hvidx', 'survey_round',
+        'year', 'month',
+    ]
+    child = ['cluster_number', 'household_number', 'hvidx', 'survey_round']
+    repeated = df.duplicated(subset=key, keep=False)
+    if not repeated.any():
+        return df
+
+    copies = df[repeated].groupby(key)
+    spread = copies[['longitude', 'latitude', value_col]].nunique(
+        dropna=False
+    )
+    conflicts = int((spread > 1).any(axis=1).sum())
+    if conflicts:
+        raise ValueError(
+            f'{path}: {conflicts} child and month combination(s) '
+            f'repeat with a different coordinate or {value_col} value'
+        )
+
+    mothers = copies['mother_caseid'].nunique(dropna=False)
+    ambiguous = mothers[mothers > 1].index
+    kept = df.drop_duplicates(subset=key, keep='first').copy()
+    unclear = kept.set_index(key).index.isin(ambiguous)
+    kept.loc[unclear, 'mother_caseid'] = np.nan
+
+    affected = df.loc[repeated, child].drop_duplicates()
+    unclear_children = kept.loc[unclear, child].drop_duplicates()
+    log.warning(
+        '%s: skipped %s repeated row(s) of %s child(ren); %s of them '
+        'had copies with different mother_caseid, now set to '
+        'missing. First few: %s',
+        Path(path).name, len(df) - len(kept), len(affected),
+        len(unclear_children), affected.head(6).to_dict('records'),
+    )
+    return kept
+
+
 def merge_monthly_covariates(
     ndvi_csv: str,
     precipitation_csv: str,
@@ -285,6 +358,7 @@ def merge_monthly_covariates(
     output_csv: str,
     overwrite: bool = False,
     collapse_to_locations: bool = False,
+    repeats: str = 'raise',
 ) -> str:
     """
     Merge the separately extracted monthly covariates into one table:
@@ -312,14 +386,38 @@ def merge_monthly_covariates(
         coordinate. When True, the rows are reduced to one per year,
         longitude, latitude, and month and the child columns are
         dropped.
+    repeats : str.
+        What to do when a child and month appears more than once in
+        a covariate file. 'raise' stops with an error, since a merge
+        on a repeated key would multiply rows. 'collapse' keeps the
+        first copy and skips the others, with a warning, see
+        _collapse_repeated_children.
 
     Returns
     -------
     result : str
             output_csv. Children are matched across the three files
-            on MERGE_KEY.
+            on MERGE_KEY. A key present in one file but not another
+            has the missing file's covariate as NA, and the count is
+            logged. The columns are CHILD_COLUMNS followed by
+            FINAL_COLUMNS, or FINAL_COLUMNS alone when
+            collapse_to_locations is True. Raises ValueError when a
+            file repeats a MERGE_KEY value, since the merge would
+            then multiply the other files' rows; when two files
+            disagree on a shared key's coordinates by more than
+            COORDINATE_TOLERANCE_DEG; or, when collapsing, when one
+            location and month holds two different values of a
+            covariate. Logs a warning when the files spell the
+            months differently, such as sep against sept, since
+            those rows then fail to match. Raises ValueError when
+            repeats is not 'raise' or 'collapse'.
 
     """
+    if repeats not in REPEAT_POLICIES:
+        raise ValueError(
+            f'repeats must be one of {REPEAT_POLICIES}, got {repeats!r}'
+        )
+
     output_path = Path(output_csv)
     if output_path.exists() and not overwrite:
         log.info('%s already present, nothing to do', output_path)
@@ -339,13 +437,17 @@ def merge_monthly_covariates(
         if missing:
             raise ValueError(f'{path} is missing column(s) {missing}')
 
+        if repeats == 'collapse':
+            df = _collapse_repeated_children(df, path, value_col)
+
         repeated = df.duplicated(subset=MERGE_KEY)
         if repeated.any():
             raise ValueError(
                 f'{path} has {int(repeated.sum())} row(s) that repeat '
                 f'a value of MERGE_KEY {MERGE_KEY} already seen in '
                 'that file; merging on it would multiply the matching '
-                'rows in the other files'
+                "rows in the other files (repeats='collapse' keeps "
+                'one copy of each repeated child)'
             )
         frames[name] = df.rename(columns={
             'longitude': f'longitude_{name}',
