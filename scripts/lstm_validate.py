@@ -6,10 +6,15 @@ and the Zimbabwe data CSV. It fine-tunes the base model on Zimbabwe data
 using four distinct layer-freezing strategies: freezing all LSTM layers and
 retraining only the fully-connected head, freezing the first LSTM layer only,
 freezing the second LSTM layer only, and retraining all layers end-to-end.
-Each fine-tuned variant is evaluated on the same held-out test period and
+Each fine-tuned variant is evaluated on the same held-out test round and
 compared against the baseline Uganda model. All comparison outputs are written
 to OUTPUT_DIR: per-strategy metrics, per-location and per-time comparison
 tables with delta columns, and a multi-panel comparison plot.
+
+Zimbabwe has three survey rounds, 2005, 2010, and 2015, and every location
+is surveyed in only one of them, with 12 months of data. The rounds are
+therefore used in time order: 2005 to fine-tune, 2010 to validate and stop
+early, and 2015 to test, so no location appears in more than one set.
 """
 
 import configparser
@@ -42,25 +47,32 @@ CONFIG.read(os.path.join(os.path.dirname(__file__), 'script_config.ini'))
 BASE_PATH = CONFIG['file_locations']['base_path']
 
 DATA_RESULTS = os.path.join(BASE_PATH, '..', 'results', 'final')
+DATA_PROCESSED = os.path.join(BASE_PATH, '..', 'results', 'processed')
 log = logging.getLogger(__name__)
 
-MODEL_PATH     = os.path.join(DATA_RESULTS, 'lstm', 'best_lstm_model.pt')
-TEST_DATA_PATH = os.path.join(DATA_RESULTS, 'mri', 'zimbabwe', 'ZWE_malaria_risk_index_monthly.csv')
+MODEL_PATH     = os.path.join(DATA_RESULTS, 'lstm', 'UGA_dhs', 'best_lstm_model.pt')
+TEST_DATA_PATH = os.path.join(DATA_PROCESSED, 'ZWE_dhs', 'file7_ZWE_malaria_monthly_risk_covariates.csv')
 TARGET_COLUMN  = 'monthly_mri'
-OUTPUT_DIR     = os.path.join(DATA_RESULTS, 'zimbabwe_validation', 'lstm_comparative')
+OUTPUT_DIR     = os.path.join(DATA_RESULTS, 'ZWE_validation', 'lstm_comparative')
 os.makedirs(OUTPUT_DIR, exist_ok = True)
 
-# Data split years
-FINETUNE_YEARS = (2015, 2017)
-VAL_YEARS      = (2018, 2019)
-TEST_YEARS     = (2020, 2022)
+# Data split by survey round. Each location is surveyed in one round only,
+# so a split by year is also a split by location: nothing is shared.
+# Time order is kept: the earliest round fine-tunes, the next one
+# validates, and the latest is held out for testing.
+FINETUNE_YEARS = [2005]
+VAL_YEARS      = [2010]
+TEST_YEARS     = [2015]
 
 INPUT_SIZE  = 7    
 HIDDEN_SIZE = 64
 NUM_LAYERS  = 2
 
-LOOK_BACK = 12
-HORIZON   = 6
+# A location has 12 months, and 11 once the first month, which has no lag,
+# is dropped. LOOK_BACK + HORIZON must therefore be 11 or less, and both
+# should equal the values the Uganda model was trained with.
+LOOK_BACK = 6
+HORIZON   = 3
 
 FEATURES = [
     'ndvi', 'precipitation_mm', 'temperature_C', 'elevation_m',
@@ -108,40 +120,138 @@ class MRILSTM(nn.Module):
 
 
 def load_and_prepare(path):
-    
-    """"
-    Loads CSV, engineers month_sin/cos 
-    and mri_lag1, drops NaNs.
+
+    """
+    Loads the CSV and prepares it for modelling.
+
+    The file holds one row per child and month, but the children at one
+    location share the raster values, so the rows are reduced to one per
+    location, year, and month, taking the mean risk of the children
+    there. month_sin, month_cos, and mri_lag1 are then added. Only the
+    columns the model uses are kept, so a column that is empty for a
+    country, such as malaria_rdt_result for Zimbabwe, cannot remove
+    every row.
 
     Parameters
     ----------
         path (str): Path to the CSV file.
 
     Returns:
-        pd.DataFrame: The processed DataFrame.
+        pd.DataFrame: One row per location and month, sorted by
+        location, year, and month, without the first month of each
+        location and year, which has no lag.
     """
 
     if not os.path.exists(path):
         log.error('Data file not found: %s', path)
         sys.exit(1)
 
-    df = pd.read_csv(path, sep = None, engine = 'python')
+    df = pd.read_csv(path, sep=None, engine='python')
+
+    keys = ['longitude', 'latitude', 'year', 'month_num']
+    covariates = ['ndvi', 'precipitation_mm', 'temperature_C', 'elevation_m']
+    needed = keys + covariates + [TARGET_COLUMN]
+    absent = [c for c in needed if c not in df.columns]
+    if absent:
+        raise ValueError(f'{path} is missing column(s) {absent}')
+
+    spread = df.groupby(keys)[covariates].nunique()
+    if (spread > 1).to_numpy().any():
+        raise ValueError(
+            'a covariate has more than one value at one location and month'
+        )
+
+    df = df.groupby(keys, as_index=False)[covariates + [TARGET_COLUMN]].mean()
+    df = df.sort_values(keys).reset_index(drop=True)
+
     df['month_sin'] = np.sin(2 * np.pi * df['month_num'] / 12)
     df['month_cos'] = np.cos(2 * np.pi * df['month_num'] / 12)
-    df['mri_lag1']  = df.groupby(['longitude', 'latitude'])['monthly_mri'].shift(1)
-    df = df.dropna().reset_index(drop = True)
 
-    log.info('Data loaded  ->  %d rows x %d cols', *df.shape)
+    # The lag stays inside one location and year, so the first month has none.
+    df['mri_lag1'] = df.groupby(
+        ['longitude', 'latitude', 'year'])[TARGET_COLUMN].shift(1)
+
+    before = len(df)
+    df = df.dropna().reset_index(drop=True)
+    n_locations = len(df[['longitude', 'latitude']].drop_duplicates())
+
+    log.info('Data loaded  ->  %d rows x %d cols, %d locations '
+             '(%d row(s) without a lag or a value dropped)',
+             *df.shape, n_locations, before - len(df))
     return df
 
 
+def split_by_year(df, finetune_years, val_years, test_years):
+
+    """
+    Splits the data into fine-tune, validation, and test sets by year.
+
+    Parameters
+    ----------
+        df : pd.DataFrame
+            The prepared data, with a year column.
+        finetune_years : list
+            Years used to fine-tune.
+        val_years : list
+            Years used to validate and stop early.
+        test_years : list
+            Years held out for testing.
+
+    Returns
+    -------
+        tuple: The fine-tune, validation, and test DataFrames. Raises
+        ValueError when a year is assigned to two sets, or when a set
+        has no rows, naming the years the data holds.
+    """
+
+    groups = {'fine-tune': finetune_years,
+              'validation': val_years,
+              'test': test_years}
+
+    assigned = {}
+    for name, years in groups.items():
+        for year in years:
+            if year in assigned:
+                raise ValueError(
+                    f'year {year} is in both the {assigned[year]} and '
+                    f'{name} sets')
+            assigned[year] = name
+
+    available = sorted(df['year'].unique().tolist())
+    parts = {}
+    for name, years in groups.items():
+        part = df[df['year'].isin(years)].copy()
+        if part.empty:
+            raise ValueError(
+                f'no rows for the {name} years {list(years)}; the data '
+                f'holds the years {available}')
+        parts[name] = part
+
+    places = {name: set(zip(p['longitude'], p['latitude']))
+              for name, p in parts.items()}
+    log.info('Locations  ->  fine-tune %d | val %d | test %d | shared '
+             'fine-tune/val %d, fine-tune/test %d, val/test %d',
+             len(places['fine-tune']), len(places['validation']),
+             len(places['test']),
+             len(places['fine-tune'] & places['validation']),
+             len(places['fine-tune'] & places['test']),
+             len(places['validation'] & places['test']))
+
+    return parts['fine-tune'], parts['validation'], parts['test']
+
+
 def scale_features(train_df, other_df, features):
-    
-    """"
-    This function scales the specified features in 
-    train_df and other_df using MinMaxScaler,
-    fitting the scaler on train_df and applying 
-    it to other_df. 
+
+    """
+    Scales the specified features in train_df and other_df using
+    MinMaxScaler, fitting one scaler on train_df and applying it to
+    other_df.
+
+    One scaler is used for all locations. A scaler per location cannot
+    work here, because each location is surveyed in one year only, so a
+    validation or test location never has a fine-tuning scaler, and a
+    feature that is constant within a location, such as elevation, would
+    be scaled to 0 everywhere.
 
     Parameters
     ----------
@@ -154,30 +264,19 @@ def scale_features(train_df, other_df, features):
 
     Returns
     -------
-        tuple: A tuple of the scaled train and other 
-        DataFrames, and the fitted scalers.
+        tuple: The scaled train and other DataFrames, and the fitted
+        scaler.
     """
 
-    scalers = {}
-    scaled_train, scaled_other = [], []
+    sort_cols = ['longitude', 'latitude', 'year', 'month_num']
+    train_scaled = train_df.sort_values(sort_cols).reset_index(drop=True)
+    other_scaled = other_df.sort_values(sort_cols).reset_index(drop=True)
 
-    for (lon, lat), grp in train_df.groupby(['longitude', 'latitude']):
-        grp = grp.sort_values(['year', 'month_num']).copy()
-        sc  = MinMaxScaler()
-        grp[features] = sc.fit_transform(grp[features])
-        scalers[(lon, lat)] = sc
-        scaled_train.append(grp)
+    scaler = MinMaxScaler()
+    train_scaled[features] = scaler.fit_transform(train_scaled[features])
+    other_scaled[features] = scaler.transform(other_scaled[features])
 
-    train_scaled = pd.concat(scaled_train).reset_index(drop = True)
-
-    for (lon, lat), grp in other_df.groupby(['longitude', 'latitude']):
-        grp = grp.sort_values(['year', 'month_num']).copy()
-        if (lon, lat) in scalers:
-            grp[features] = scalers[(lon, lat)].transform(grp[features])
-            scaled_other.append(grp)
-
-    other_scaled = pd.concat(scaled_other).reset_index(drop = True)
-    return train_scaled, other_scaled, scalers
+    return train_scaled, other_scaled, scaler
 
 
 def scale_target(y_train, y_other):
@@ -206,9 +305,11 @@ def scale_target(y_train, y_other):
 
 
 def create_sequences(df, features, target, look_back, horizon):
-    
+
     """
-    Creates (X, y, locations) sequences per location group.
+    Creates (X, y, locations, ids) sequences per location and year.
+
+    A sequence never crosses from one location or year to another.
 
     Parameters
     ----------
@@ -225,23 +326,30 @@ def create_sequences(df, features, target, look_back, horizon):
 
     Returns
     -------
-        tuple: A tuple of the created sequences (X, y, locations).
+        tuple: The sequences X, the targets y, the (longitude, latitude)
+        of each sequence, and a DataFrame with the identifiers of the row
+        each target belongs to, in the same order as y.
     """
-    X, y, locs = [], [], []
+    id_cols = [c for c in ['longitude', 'latitude', 'year', 'month',
+                           'month_num'] if c in df.columns]
+    X, y, locs, ids = [], [], [], []
 
-    for (lon, lat), grp in df.sort_values(['year', 'month_num']).groupby(
-            ['longitude', 'latitude']):
+    for (lon, lat, _year), grp in df.groupby(
+            ['longitude', 'latitude', 'year']):
 
-        grp  = grp.sort_values(['year', 'month_num'])
+        grp = grp.sort_values('month_num')
         data = grp[features].values
-        tgt  = grp[target].values
+        tgt = grp[target].values
 
         for i in range(len(grp) - look_back - horizon + 1):
+            at = i + look_back + horizon - 1
             X.append(data[i:i + look_back])
-            y.append(tgt[i + look_back + horizon - 1])
+            y.append(tgt[at])
             locs.append((lon, lat))
+            ids.append(grp.iloc[at][id_cols])
 
-    return np.array(X), np.array(y), locs
+    ids = pd.DataFrame(ids, columns=id_cols).reset_index(drop=True)
+    return np.array(X), np.array(y), locs, ids
 
 
 def to_loader(X, y, device, batch_size, shuffle = False):
@@ -493,6 +601,9 @@ def build_results_df(y_true, y_pred, locations, id_df, id_cols, approach_label):
     -------
         pd.DataFrame: A DataFrame with the results.
     """
+    if len(id_df) != len(y_true):
+        raise ValueError(
+            f'{len(id_df)} identifier rows for {len(y_true)} predictions')
     present = [c for c in id_cols if c in id_df.columns]
     results = id_df[present].copy().reset_index(drop = True)
     results['observed']  = y_true
@@ -625,7 +736,7 @@ def plot_comparison(all_results, all_metrics, out_path):
 
     fig.suptitle(
         'LSTM MRI Model Comparison - Baseline vs Fine-tuning Strategies\n'
-        f'Test period: {TEST_YEARS[0]}-{TEST_YEARS[1]}',
+        f'Test year(s): {", ".join(str(y) for y in TEST_YEARS)}',
         fontsize = 14, fontweight = 'bold')
     fig.savefig(out_path, dpi = 150, bbox_inches = 'tight')
     plt.close(fig)
@@ -769,29 +880,30 @@ def run_lstm_comparative_evaluation(
     # ── Load and prepare data ─────────────────────────────────────────────
     df = load_and_prepare(data_path)
 
-    # ── Three-way split ───────────────────────────────────────────────────
-    ft_df   = df[(df['year'] >= FINETUNE_YEARS[0]) &
-                 (df['year'] <= FINETUNE_YEARS[1])].copy()
-    val_df  = df[(df['year'] >= VAL_YEARS[0]) &
-                 (df['year'] <= VAL_YEARS[1])].copy()
-    test_df = df[(df['year'] >= TEST_YEARS[0]) &
-                 (df['year'] <= TEST_YEARS[1])].copy()
+    # ── Three-way split by year ───────────────────────────────────────────
+    ft_df, val_df, test_df = split_by_year(
+        df, FINETUNE_YEARS, VAL_YEARS, TEST_YEARS)
 
     log.info('Fine-tune: %d rows | Val: %d rows | Test: %d rows',
              len(ft_df), len(val_df), len(test_df))
 
-    if len(test_df) == 0:
-        log.error('No test rows for years %d-%d.', *TEST_YEARS)
-        sys.exit(1)
-
     # ── Scale features (fit on fine-tune set, apply to val and test) ────────
-    ft_scaled, val_scaled,  scalers_X = scale_features(ft_df, val_df,  FEATURES)
-    _,         test_scaled, _         = scale_features(ft_df, test_df, FEATURES)
+    ft_scaled, val_scaled,  _ = scale_features(ft_df, val_df,  FEATURES)
+    _,         test_scaled, _ = scale_features(ft_df, test_df, FEATURES)
 
     # ── Create sequences ──────────────────────────────────────────────────
-    X_ft,   y_ft,   locs_ft   = create_sequences(ft_scaled,   FEATURES, target, LOOK_BACK, HORIZON)
-    X_val,  y_val,  locs_val  = create_sequences(val_scaled,  FEATURES, target, LOOK_BACK, HORIZON)
-    X_test, y_test, locs_test = create_sequences(test_scaled, FEATURES, target, LOOK_BACK, HORIZON)
+    X_ft,   y_ft,   _,         _          = create_sequences(ft_scaled,   FEATURES, target, LOOK_BACK, HORIZON)
+    X_val,  y_val,  _,         _          = create_sequences(val_scaled,  FEATURES, target, LOOK_BACK, HORIZON)
+    X_test, y_test, locs_test, test_id_df = create_sequences(test_scaled, FEATURES, target, LOOK_BACK, HORIZON)
+
+    for name, X in (('fine-tune', X_ft), ('validation', X_val), ('test', X_test)):
+        if len(X) == 0:
+            raise ValueError(
+                f'no {name} sequences: a location needs at least '
+                f'LOOK_BACK + HORIZON = {LOOK_BACK + HORIZON} consecutive months')
+
+    log.info('Sequences: fine-tune %d | val %d | test %d',
+             len(X_ft), len(X_val), len(X_test))
 
     # ── Scale target (fit on fine-tune set, apply to val and test) ──────────
     y_ft_s,   y_val_s,  y_scaler = scale_target(y_ft, y_val)
@@ -802,10 +914,7 @@ def run_lstm_comparative_evaluation(
     val_loader  = to_loader(X_val,  y_val_s, device, FINETUNE_BATCH)
     test_loader = to_loader(X_test, y_test_s, device, FINETUNE_BATCH)
 
-    # Build id DataFrame for test set (for results assembly)
-    test_id_df = test_scaled.copy().reset_index(drop = True)
-    # Trim to match sequence length
-    test_id_df = test_id_df.iloc[len(test_id_df) - len(locs_test):].reset_index(drop = True)
+    # test_id_df holds the identifiers of each test prediction, in order
     id_cols    = ['latitude', 'longitude', 'year', 'month', 'month_num']
 
     # ── STEP 1: Baseline evaluation (no fine-tuning) ──────────────────────
