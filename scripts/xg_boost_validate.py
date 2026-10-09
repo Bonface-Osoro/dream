@@ -13,6 +13,20 @@ are written to OUTPUT_DIR: the booster pickle, the n_trees search log, global
 metrics for both approaches, per-location and per-time metrics with delta
 columns showing the gain from fine-tuning, and a six-panel comparison plot.
 
+Zimbabwe has three survey rounds, 2005, 2010, and 2015, and every location
+is surveyed in only one of them, with 12 months of data. The rounds are
+therefore used in time order: 2005 to fit the residual booster, 2010 to
+select the number of trees, and 2015 to test, so no location appears in
+more than one set.
+
+The Uganda model predicts the risk HORIZON rows ahead from lag and rolling
+features, which xg_load_and_prepare_data builds with a shift by row position
+within each location. The same features and target are built here, so the
+Uganda model is evaluated on the inputs it was trained on. FEATURE_MODE
+chooses how: 'row_order' repeats the Uganda training script exactly on the
+file as it is, and 'calendar' builds true monthly lags on one row per
+location and month, for a model that was trained that way.
+
 """
 
 import configparser
@@ -46,16 +60,19 @@ DATA_PROCESSED = os.path.join(BASE_PATH, '..', 'results', 'processed')
 DATA_RESULTS = os.path.join(BASE_PATH, '..', 'results', 'final')
 log = logging.getLogger(__name__)
 
-MODEL_PATH     = os.path.join(DATA_RESULTS, 'xgboost', 'xgb_model.pkl')
-TEST_DATA_PATH = os.path.join(DATA_RESULTS, 'mri', 'zimbabwe', 'ZWE_malaria_risk_index_monthly.csv')
+MODEL_PATH     = os.path.join(DATA_RESULTS, 'xgboost', 'UGA_dhs', 'xgb_model.pkl')
+TEST_DATA_PATH = os.path.join(DATA_PROCESSED, 'ZWE_dhs', 'file7_ZWE_malaria_monthly_risk_covariates.csv')
 TARGET_COLUMN  = 'monthly_mri'
-OUTPUT_DIR     = os.path.join(DATA_RESULTS, 'zimbabwe_validation')
+OUTPUT_DIR     = os.path.join(DATA_RESULTS, 'ZWE_validation', 'xgboost_comparative')
 os.makedirs(OUTPUT_DIR, exist_ok = True)
 
-# Data split years 
-FINETUNE_YEARS = (2015, 2017)   # inclusive range used to train residual booster
-VAL_YEARS      = (2018, 2019)   # used to select best n_trees (no data leakage)
-TEST_YEARS     = (2020, 2022)   # held-out, never touched during fine-tuning
+# Data split by survey round. Each location is surveyed in one round only,
+# so a split by year is also a split by location: nothing is shared.
+# Time order is kept: the earliest round trains the residual booster, the
+# next one selects the number of trees, and the latest is held out.
+FINETUNE_YEARS = [2005]   # used to train the residual booster
+VAL_YEARS      = [2010]   # used to select best n_trees (no data leakage)
+TEST_YEARS     = [2015]   # held-out, never touched during fine-tuning
 
 # Residual booster hyperparameters
 BOOSTER_LEARNING_RATE = 0.01
@@ -71,6 +88,31 @@ BOOSTER_N_TREES_GRID = [100, 200, 300, 400, 500, 600, 750,
 ID_COLUMNS = ['latitude', 'longitude', 'year', 'month', 'month_num']
 
 FEATURE_COLUMNS = None
+
+# Environmental covariates kept in 'calendar' mode, where the rows are
+# reduced to one per location and month. A feature the model expects that
+# is not here is reported as missing.
+COVARIATE_COLUMNS = ['ndvi', 'precipitation_mm', 'temperature_C',
+    'elevation_m']
+
+# History features and target, as built by xg_load_and_prepare_data in the
+# Uganda training script. Keep them identical to it.
+LAGS = [1, 2, 3, 6, 12]
+ROLL_WINDOWS = [3, 6]
+EVAL_TARGET = 'target'
+
+# The number of steps ahead the Uganda model was trained to predict. It is
+# the horizon passed to xg_load_and_prepare_data when that model was
+# trained, so it cannot be worked out here and must be set.
+HORIZON = 6
+
+# 'row_order' : repeat the Uganda training script on the file as it is,
+#               shifting by row position within each location.
+# 'calendar'  : one row per location and month, shifted in calendar order
+#               within each location and year.
+FEATURE_MODE = 'row_order'
+FEATURE_MODES = ('row_order', 'calendar')
+
 
 def load_pickle(path, label):
     """
@@ -210,7 +252,7 @@ def resolve_features(df, target, id_cols, feature_cols, model):
         log.info('Features from model (%d): %s', len(names), names)
         return names
     
-    exclude = set(id_cols) | {target}
+    exclude = set(id_cols) | {target, EVAL_TARGET}
     auto = [c for c in df.columns
             if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
     log.warning('Auto-detected features (%d): %s', len(auto), auto)
@@ -278,27 +320,219 @@ def metrics_per_group(df, group_cols,
     return pd.DataFrame(records)
 
 
-def train_residual_booster(model, df, features, target, out_dir):
+def prepare_data(df, target):
+
+    """
+    Reduces the data to one row per location, year, and month.
+
+    The file holds one row per child and month, but the children at one
+    location share the raster values, so the covariates are identical
+    and the target, the risk of each child, is averaged. A file that
+    already has one row per location and month passes through unchanged.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The input data.
+    target : str
+        The target column name.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per location and month, sorted by location, year, and
+        month. Raises ValueError when a required column is missing, or
+        when a covariate has more than one value at one location and
+        month, since the mean would then hide a difference.
+    """
+
+    keys = ['longitude', 'latitude', 'year', 'month_num']
+    absent = [c for c in keys + [target] if c not in df.columns]
+    if absent:
+        raise ValueError(f'the data is missing column(s) {absent}')
+
+    covariates = [c for c in COVARIATE_COLUMNS if c in df.columns]
+    spread = df.groupby(keys)[covariates].nunique()
+    if (spread > 1).to_numpy().any():
+        raise ValueError(
+            'a covariate has more than one value at one location and month'
+        )
+
+    aggregations = {c: 'mean' for c in covariates + [target]}
+    if 'month' in df.columns:
+        aggregations['month'] = 'first'
+
+    out = df.groupby(keys, as_index=False).agg(aggregations)
+    out = out.sort_values(keys).reset_index(drop=True)
+
+    log.info('One row per location and month  ->  %d rows (%d locations)',
+             len(out), len(out[['longitude', 'latitude']].drop_duplicates()))
+    return out
+
+
+def build_features(df, series, horizon, mode):
+
+    """
+    Builds the history features and the target the Uganda model uses.
+
+    The features are those of xg_load_and_prepare_data: the series shifted
+    by each of LAGS, its rolling mean over each of ROLL_WINDOWS, which
+    includes the current row, and the series shifted back by horizon as
+    the target. Which rows count as earlier depends on the mode.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The input data.
+    series : str
+        The monthly risk column.
+    horizon : int
+        The number of steps ahead the model predicts.
+    mode : str
+        'row_order' shifts by row position within each location, in the
+        order of the file, as the Uganda training script does. In the
+        monthly file that is child by child, each child's months in
+        alphabetical order, so a lag is not a calendar lag. 'calendar'
+        first reduces the data to one row per location and month, then
+        shifts in month order within each location and year.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The data with the lag, rolling, and target columns added, not yet
+        cleaned of missing values. Raises ValueError for an unknown mode,
+        or when horizon is not a positive whole number, since a wrong
+        horizon would evaluate the model against the wrong target.
+    """
+
+    if mode not in FEATURE_MODES:
+        raise ValueError(f'FEATURE_MODE must be one of {FEATURE_MODES}, '
+                         f'got {mode!r}')
+    if not isinstance(horizon, int) or horizon < 1:
+        raise ValueError(
+            'set HORIZON to the number of steps ahead the Uganda model was '
+            'trained to predict, the horizon passed to '
+            f'xg_load_and_prepare_data; got {horizon!r}')
+
+    if mode == 'calendar':
+        df = prepare_data(df, series)
+        keys = ['longitude', 'latitude', 'year']
+    else:
+        df = df.copy()
+        keys = ['longitude', 'latitude']
+        log.warning(
+            'Features follow the row order of the file within each location, '
+            'as in the Uganda training script, not calendar order. Months '
+            'run in this order for the first location: %s',
+            list(df['month'].head(12)) if 'month' in df.columns else 'n/a')
+
+    grouped = df.groupby(keys)[series]
+    for lag in LAGS:
+        df[f'mri_lag{lag}'] = grouped.shift(lag)
+    for window in ROLL_WINDOWS:
+        df[f'mri_roll{window}'] = grouped.transform(
+            lambda x: x.rolling(window).mean())
+    df[EVAL_TARGET] = grouped.shift(-horizon)
+
+    log.info('Built lags %s, rolling windows %s, and the target %d step(s) '
+             'ahead  (mode %s)', LAGS, ROLL_WINDOWS, horizon, mode)
+    return df
+
+
+def split_by_year(df, finetune_years, val_years, test_years):
+
+    """
+    Splits the data into fine-tune, validation, and test sets by year.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The prepared data, with a year column.
+    finetune_years : list
+        Years used to train the residual booster.
+    val_years : list
+        Years used to select the number of trees.
+    test_years : list
+        Years held out for testing.
+
+    Returns
+    -------
+    tuple
+        The fine-tune, validation, and test DataFrames. Raises
+        ValueError when a year is assigned to two sets, or when a set
+        has no rows, naming the years the data holds.
+    """
+
+    groups = {'fine-tune': finetune_years,
+              'validation': val_years,
+              'test': test_years}
+
+    assigned = {}
+    for name, years in groups.items():
+        for year in years:
+            if year in assigned:
+                raise ValueError(
+                    f'year {year} is in both the {assigned[year]} and '
+                    f'{name} sets')
+            assigned[year] = name
+
+    available = sorted(df['year'].unique().tolist())
+    parts = {}
+    for name, years in groups.items():
+        part = df[df['year'].isin(years)].copy()
+        if part.empty:
+            raise ValueError(
+                f'no rows for the {name} years {list(years)}; the data '
+                f'holds the years {available}')
+        parts[name] = part
+
+    places = {name: set(zip(p['longitude'], p['latitude']))
+              for name, p in parts.items()}
+    log.info('Locations  ->  fine-tune %d | val %d | test %d | shared '
+             'fine-tune/val %d, fine-tune/test %d, val/test %d',
+             len(places['fine-tune']), len(places['validation']),
+             len(places['test']),
+             len(places['fine-tune'] & places['validation']),
+             len(places['fine-tune'] & places['test']),
+             len(places['validation'] & places['test']))
+
+    return parts['fine-tune'], parts['validation'], parts['test']
+
+
+def train_residual_booster(model, ft_df, val_df, features, target, out_dir):
     """
     Trains a residual booster on the fine-tune split.
     Selects best n_trees using validation split (no test data leakage).
     Saves the booster and returns it.
-    """
-    ft_mask  = ((df['year'] >= FINETUNE_YEARS[0]) &
-                (df['year'] <= FINETUNE_YEARS[1]))
-    val_mask = ((df['year'] >= VAL_YEARS[0]) &
-                (df['year'] <= VAL_YEARS[1]))
 
-    ft_df  = df[ft_mask].copy()
-    val_df = df[val_mask].copy()
+    Parameters
+    ----------
+    model : object
+        The Uganda base model.
+    ft_df : pandas.DataFrame
+        The fine-tune rows.
+    val_df : pandas.DataFrame
+        The validation rows.
+    features : list of str
+        The feature columns.
+    target : str
+        The target column name.
+    out_dir : str
+        The directory the booster and the search log are saved to.
+
+    Returns
+    -------
+    tuple
+        The best booster, its number of trees, and its validation R2.
+    """
 
     X_ft,  y_ft  = ft_df[features],  ft_df[target].values
     X_val, y_val = val_df[features], val_df[target].values
 
-    log.info('Fine-tune split : %d rows  (%d-%d)',
-             len(ft_df),  FINETUNE_YEARS[0], FINETUNE_YEARS[1])
-    log.info('Validation split: %d rows  (%d-%d)',
-             len(val_df), VAL_YEARS[0], VAL_YEARS[1])
+    log.info('Fine-tune split : %d rows  (years %s)',
+             len(ft_df), FINETUNE_YEARS)
+    log.info('Validation split: %d rows  (years %s)',
+             len(val_df), VAL_YEARS)
 
     residuals = y_ft - model.predict(X_ft)
     log.info('Residual stats  mean=%.4f  std=%.4f  min=%.4f  max=%.4f',
@@ -481,7 +715,7 @@ def plot_comparison(res_base, res_ft, gm_base, gm_ft, out_path):
 
     fig.suptitle(
         'MRI Model Comparison - Baseline vs Fine-tuned (Warm-Start Boosting)\n'
-        f'Test period: {TEST_YEARS[0]}-{TEST_YEARS[1]}',
+        f'Test year(s): {", ".join(str(y) for y in TEST_YEARS)}',
         fontsize = 14, fontweight = 'bold')
     fig.savefig(out_path, dpi = 150, bbox_inches = 'tight')
     plt.close(fig)
@@ -599,6 +833,31 @@ def run_comparative_evaluation(
         feature_cols = FEATURE_COLUMNS,
         output_dir   = OUTPUT_DIR):
 
+    """
+    Fits the residual booster on the fine-tune years, selects its size
+    on the validation years, and compares the Uganda base model with
+    and without the booster on the test years.
+
+    Parameters
+    ----------
+    model_path : str
+        The Uganda base model pickle.
+    data_path : str
+        The Zimbabwe data CSV.
+    target : str
+        The target column name.
+    id_cols : list of str or None
+        The identifier columns copied into the results.
+    feature_cols : list of str or None
+        The feature columns. When None they are taken from the model.
+    output_dir : str
+        The directory all outputs are written to.
+
+    Returns
+    -------
+    None
+    """
+
     if id_cols is None:
 
         id_cols = ID_COLUMNS
@@ -607,9 +866,12 @@ def run_comparative_evaluation(
     model = load_pickle(model_path, 'Base model')
     df    = load_data(data_path)
 
-    if 'monthly_mri' not in df.columns:
-        log.error('Column monthly_mri not found. Available: %s', list(df.columns))
+    if target not in df.columns:
+        log.error('Column %s not found. Available: %s', target, list(df.columns))
         sys.exit(1)
+
+    # History features and the target, as in the Uganda training script
+    df = build_features(df, target, HORIZON, FEATURE_MODE)
 
     # Feature engineering
     if 'month_sin' not in df.columns and 'month_num' in df.columns:
@@ -617,36 +879,35 @@ def run_comparative_evaluation(
         df['month_cos'] = np.cos(2 * np.pi * df['month_num'] / 12)
         log.info('Engineered month_sin / month_cos')
 
-    df = df.dropna(subset = [target]).reset_index(drop = True)
-
     features = resolve_features(df, target, id_cols, feature_cols, model)
+
+    # Only the columns the model uses must be present. The Uganda script
+    # dropped a row with a missing value in any column, which here would
+    # drop every row, since malaria_rdt_result is empty for Zimbabwe.
+    before = len(df)
+    df = df.dropna(subset = features + [EVAL_TARGET]).reset_index(drop = True)
+    log.info('Rows with a missing feature or target dropped: %d of %d',
+             before - len(df), before)
+
+    ft_df, val_df, test_df = split_by_year(
+        df, FINETUNE_YEARS, VAL_YEARS, TEST_YEARS)
+    test_df = test_df.reset_index(drop = True)
 
     # ── STEP 1: Train residual booster ────────────────────────────────────
     log.info('=' * 60)
     log.info('STEP 1 - TRAINING RESIDUAL BOOSTER (warm-start)')
-    log.info('  Fine-tune : %d-%d  |  Validation : %d-%d  |  Test : %d-%d',
-             FINETUNE_YEARS[0], FINETUNE_YEARS[1],
-             VAL_YEARS[0],      VAL_YEARS[1],
-             TEST_YEARS[0],     TEST_YEARS[1])
+    log.info('  Fine-tune : %s  |  Validation : %s  |  Test : %s',
+             FINETUNE_YEARS, VAL_YEARS, TEST_YEARS)
     log.info('=' * 60)
 
     residual_booster, best_n, best_val_r2 = train_residual_booster(
-        model, df, features, target, output_dir)
-
-    test_mask = ((df["year"] >= TEST_YEARS[0]) &
-                 (df["year"] <= TEST_YEARS[1]))
-    test_df   = df[test_mask].copy().reset_index(drop=True)
-
-    if len(test_df) == 0:
-        log.error('No test rows found for years %d-%d. Check TEST_YEARS in config.',
-                  TEST_YEARS[0], TEST_YEARS[1])
-        sys.exit(1)
+        model, ft_df, val_df, features, EVAL_TARGET, output_dir)
 
     log.info("=" * 60)
     log.info("STEP 2 — APPROACH 1: BASELINE (no adaptation)")
     log.info("=" * 60)
     res_base, gm_base, loc_base, time_base = run_single(
-        test_df, model, features, target, id_cols,
+        test_df, model, features, EVAL_TARGET, id_cols,
         residual_booster = None,
         approach_label   = 'baseline')
     
@@ -654,7 +915,7 @@ def run_comparative_evaluation(
     log.info('STEP 3 — APPROACH 2: FINE-TUNED (n_trees=%d)', best_n)
     log.info("=" * 60)
     res_ft, gm_ft, loc_ft, time_ft = run_single(
-        test_df, model, features, target, id_cols,
+        test_df, model, features, EVAL_TARGET, id_cols,
         residual_booster = residual_booster,
         approach_label   = 'finetuned')
     
