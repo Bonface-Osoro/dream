@@ -186,7 +186,7 @@ def combine_covariate_monthly(
 
     os.makedirs(output_folder, exist_ok=True)
     output_path = os.path.join(
-        output_folder, f'UGA_combined_monthly_{covariate}.csv'
+        output_folder, f'ZMB_combined_monthly_{covariate}.csv'
     )
     combined.to_csv(output_path, index=False)
     log.info(
@@ -397,20 +397,7 @@ def merge_monthly_covariates(
     -------
     result : str
             output_csv. Children are matched across the three files
-            on MERGE_KEY. A key present in one file but not another
-            has the missing file's covariate as NA, and the count is
-            logged. The columns are CHILD_COLUMNS followed by
-            FINAL_COLUMNS, or FINAL_COLUMNS alone when
-            collapse_to_locations is True. Raises ValueError when a
-            file repeats a MERGE_KEY value, since the merge would
-            then multiply the other files' rows; when two files
-            disagree on a shared key's coordinates by more than
-            COORDINATE_TOLERANCE_DEG; or, when collapsing, when one
-            location and month holds two different values of a
-            covariate. Logs a warning when the files spell the
-            months differently, such as sep against sept, since
-            those rows then fail to match. Raises ValueError when
-            repeats is not 'raise' or 'collapse'.
+            on MERGE_KEY.
 
     """
     if repeats not in REPEAT_POLICIES:
