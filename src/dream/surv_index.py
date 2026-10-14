@@ -91,7 +91,7 @@ ID_COLUMNS: dict[str, list[str]] = {
     "HR": ["hv001", "hv002", "hhid"],
     "PR": ["hv001", "hv002", "hvidx", "hhid", "hc60"]}
 
-GE_COLUMNS = ['DHSID', 'DHSCLUST', 'LATNUM', 'LONGNUM']
+GE_COLUMNS = ['DHSID', 'DHSCLUST', 'LATNUM', 'LONGNUM', 'ALT_DEM']
 
 NET_USE_COLUMNS = ['ml101']
  
@@ -477,6 +477,11 @@ def load_gps_clusters(base_dir, zip_glob: str = '*.zip') -> pd.DataFrame:
                     fpath = os.path.join(root, fname)
                     round_folder = os.path.relpath(root, extract_dir).split(
                         os.sep)[0]
+                    if '_' not in round_folder:
+ 
+                        # Flat per-round zip: the first folder is the
+                        # recode name, so take the round from the zip.
+                        round_folder = zip_path.stem
                     round_label = survey_round_label(round_folder)
  
                     try:
@@ -565,6 +570,11 @@ def load_gps_locations(base_dir: str, zip_glob: str = '*.zip') -> pd.DataFrame |
                     fpath = os.path.join(root, fname)
                     round_folder = os.path.relpath(root, extract_dir).split(
                         os.sep)[0]
+                    if '_' not in round_folder:
+ 
+                        # Flat per-round zip: the first folder is the
+                        # recode name, so take the round from the zip.
+                        round_folder = zip_path.stem
                     round_label = survey_round_label(round_folder)
  
                     try:
@@ -700,6 +710,25 @@ def merge_with_gps_clusters(index_path, gps_base_dir,
                 cluster_column)
  
     merged = merged.drop(columns = ['_join_cluster'])
+ 
+    # Some surveys (for example the 2007 Zambia MIS) do not record cluster
+    # altitude in the household recode (hv040). Fall back to the GPS
+    # file's DEM altitude for those rows only; reported values are kept.
+    if 'ALT_DEM' in merged.columns:
+ 
+        dem = pd.to_numeric(merged['ALT_DEM'], errors = 'coerce')
+        dem = dem.where(dem < 9000)
+        if 'hv040' not in merged.columns:
+ 
+            merged['hv040'] = np.nan
+        hv040 = pd.to_numeric(merged['hv040'], errors = 'coerce')
+        hv040 = hv040.where(hv040 < 9000)
+        fill = hv040.isna() & dem.notna()
+        if fill.any():
+ 
+            log.info('hv040: filled %s of %s row(s) from GPS ALT_DEM',
+                int(fill.sum()), len(merged))
+        merged['hv040'] = hv040.fillna(dem)
  
     merged.to_csv(output_path, index = False)
     log.info('wrote %s with %s row(s) and %s column(s)', output_path,
