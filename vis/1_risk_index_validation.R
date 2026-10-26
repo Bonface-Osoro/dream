@@ -55,14 +55,14 @@ uga_positivity <- ggplot(validation, aes(x = risk_category, y = positivity_pct,
 
 uga_risk_ratio <- ggplot(validation, aes(x = risk_category, y = risk_ratio_vs_lowest, 
                                          fill = risk_category, width = 0.99)) + geom_col() +
-  geom_text(aes(label = sprintf("%.1f%%", risk_ratio_vs_lowest)),
+  geom_text(aes(label = sprintf("%.1f", risk_ratio_vs_lowest)),
             vjust = -0.5, size = 2) +
   scale_fill_viridis_d(option = "viridis", na.value = "grey90") +
   scale_x_discrete(labels = category_labels) +
   scale_y_continuous(limits = c(0, 5), expand = expansion(mult = c(0, 0.05)),
-                     labels = function(x) paste0(x, "%")) +
+                     labels = function(x) paste0(x)) +
   labs(title = "(B) Malaria Risk Ratio",
-       subtitle = "Estimated by dividing the RDT positivity in each risk category by the RDT positivity \nin the low-risk reference category.",
+       subtitle = "Estimated by dividing the RDT positivity in each risk category by the RDT positivity \nin the extremely low-risk reference category.",
        x = "Risk category", y = "Malaria Risk Ratio") + theme_minimal() +
   scale_x_discrete(labels = category_labels, expand = expansion(mult = c(0, 0)))+
   theme(legend.position = 'none',

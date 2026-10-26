@@ -72,7 +72,7 @@ xg_shap_bar <- ggplot(importance_df, aes(x = reorder(feature, mean_abs_shap),
   scale_fill_viridis(option = "viridis") + theme_minimal() +
   labs(title = 'SHAP Feature Importance', subtitle = '(a) XGBoost Model', x = '',
        y = 'Mean SHAP value') +
-  geom_text(aes(label = sprintf("+%.02f", mean_abs_shap)),
+  geom_text(aes(label = sprintf("+%.04f", mean_abs_shap)),
             hjust = -0.1, size = 2) +
   theme(legend.position = 'none',
         plot.title = element_text(size = 12, face = "bold"),
@@ -94,8 +94,8 @@ xg_shap_bar <- ggplot(importance_df, aes(x = reorder(feature, mean_abs_shap),
 ##########################
 ## 2. LSTM SHAP SUMMARY ##
 ##########################
-lstm_file <- read.csv(file.path(folder, '..', 'results', 'final', 
-                                'lstm', 'lstm_shap_values.csv'))
+lstm_file <- read.csv(file.path(folder, '..', 'results', 'final', 'lstm',
+                                'UGA_dhs', 'lstm_shap_values.csv'))
 shap_cols <- c("ndvi", "precipitation_mm", "temperature_C",
                "elevation_m", "month_sin", "month_cos", "mri_lag1")
 
@@ -149,7 +149,7 @@ lstm_shap_bar <- ggplot(importance_df, aes(x = reorder(feature, mean_abs_shap),
       y = mean_abs_shap, fill = mean_abs_shap)) + geom_col() +coord_flip() +
   scale_fill_viridis(option = "viridis") + theme_minimal() +
   labs(title = ' ', subtitle = '(b) LSTM Model', x = "", y = "Mean SHAP value") +
-  geom_text(aes(label = sprintf("+%.02f", mean_abs_shap)),
+  geom_text(aes(label = sprintf("+%.04f", mean_abs_shap)),
             hjust = -0.1, size = 2) +
   theme(legend.position = 'none',
         plot.title = element_text(size = 12, face = "bold"),
@@ -177,7 +177,7 @@ bar_plots <- ggarrange(xg_shap_bar, lstm_shap_bar, ncol = 2,
 combined_plots <- ggarrange(summary_plots, bar_plots, ncol = 1,
                             nrow = 2)
 
-path = file.path(folder, 'figures', 'explainable_ai.png')
+path = file.path(folder, 'figures', '2_explainable_ai.png')
 png(path, units="in", width=7, height=6, res=300)
 print(combined_plots)
 dev.off()

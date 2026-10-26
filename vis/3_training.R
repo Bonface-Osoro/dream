@@ -8,7 +8,7 @@ folder <- dirname(rstudioapi::getSourceEditorContext()$path)
 ## 1. XG BOOST STRATEGY ##
 ##########################
 df1 <- read.csv(file.path(folder, '..', 'results', 'final',
-     'zimbabwe_validation', 'finetuning_search.csv'))
+     'ZMB_validation', 'xgboost_comparative', 'finetuning_search.csv'))
 
 df_long <- df1 %>%
   select(n_trees, val_R2, val_RMSE) %>%
@@ -46,7 +46,7 @@ xg_boost_val <- ggplot(df_long, aes(x = n_trees, y = value, colour = metric, sha
 ## 2. LSTM TRAINING STRATEGY ##
 ###############################
 df <- read.csv(file.path(folder, '..', 'results', 'final',
-   'zimbabwe_validation', 'lstm_comparative', 'finetuning_training_logs.csv'))
+   'ZMB_validation', 'lstm_comparative', 'finetuning_training_logs.csv'))
 
 df <- df %>%
   mutate(strategy = recode(strategy, freeze_all_lstm = "Freeze All LSTM",
@@ -81,17 +81,17 @@ lstm_val <- ggplot(df, aes(x = epoch, y = val_loss, colour = strategy)) +
     axis.line.x  = element_line(size = 0.15),
     axis.line.y  = element_line(size = 0.15),
     legend.title = element_text(size = 7),
-    legend.text = element_text(size = 6)) + 
-  scale_y_continuous(expand = c(0, 0),
-     labels = function(y) format(y, scientific = FALSE), limits = c(0, 0.019)) +
-  scale_x_continuous(expand = c(0, 0),
-     limits = c(min(df$epoch, epoch = TRUE), 15),
-     breaks = seq(min(df$epoch, na.rm = TRUE), 15, by = 5))
+    legend.text = element_text(size = 6))  
+  #scale_y_continuous(expand = c(0, 0),
+     #labels = function(y) format(y, scientific = FALSE), limits = c(0, 0.019)) +
+  #scale_x_continuous(expand = c(0, 0),
+     #limits = c(min(df$epoch, epoch = TRUE), 50),
+     #breaks = seq(min(df$epoch, na.rm = TRUE), 50, by = 5))
 ###############################
 ## 3. DENSITY PLOTS XG Boost ##
 ###############################
 df3 <- read.csv(file.path(folder, '..', 'results', 'final',
-       'zimbabwe_validation', 'comparison_per_location.csv'))
+       'ZMB_validation', 'xgboost_comparative', 'comparison_per_location.csv'))
 
 df_long3 <- data.frame(value = c(df3$RMSE_baseline, df3$RMSE_finetuned),
   strategy = c(rep("Baseline", nrow(df3)), rep("XGBoost Residual", nrow(df3))))
@@ -132,7 +132,7 @@ XG_error <- ggplot(df_long3, aes(x = value, colour = strategy, fill = strategy))
 ## 4. DENSITY PLOTS LSTM ##
 ###########################
 df2 <- read.csv(file.path(folder, '..', 'results', 'final',
-   'zimbabwe_validation', 'lstm_comparative', 'comparison_per_location.csv'))
+   'ZMB_validation', 'lstm_comparative', 'comparison_per_location.csv'))
 
 df_long1 <- data.frame(value    = c(
   df2$RMSE_baseline, df2$RMSE_freeze_lstm_l1,
@@ -220,7 +220,7 @@ combined_plots <- ggarrange(xg_boost_val, lstm_val, XG_error, lstm_error,
     ncol = 2, nrow = 2)
 
 
-path = file.path(folder, 'figures', 'training_plots.png')
+path = file.path(folder, 'figures', '2_training_plots.png')
 png(path, units="in", width=7, height=6.5, res=300)
 print(combined_plots)
 dev.off()
@@ -229,7 +229,7 @@ dev.off()
 ## 5. ERROR PLOTS XG BOOST ##
 #############################
 df4 <- read.csv(file.path(folder, '..', 'results', 'final',
-   'zimbabwe_validation',  'comparison_per_location.csv'))
+   'ZMB_validation',  'xgboost_comparative', 'comparison_per_location.csv'))
 
 
 r2_base  <- round(max(df4$R2_baseline,  na.rm = TRUE), 4)
@@ -264,7 +264,7 @@ xg_res_plot <- ggplot(df_long4, aes(x = observed, y = predicted, colour = approa
   scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
   facet_wrap(~ approach, ncol = 2) +
   labs(title = "(A) XG Boost Model", 
-       subtitle = "MRI XG Boost baseline vs fine-tuned (Warm-Start Boosting) for \n2020-2022 test period", 
+       subtitle = "MRI XG Boost baseline vs fine-tuned (Warm-Start Boosting) for \n2007-2024 test period", 
        x = "Observed MRI", y = "Predicted MRI") +
   theme_bw(base_size = 12) +
   theme(legend.position = 'bottom',
@@ -283,7 +283,7 @@ xg_res_plot <- ggplot(df_long4, aes(x = observed, y = predicted, colour = approa
 ## 6. SERIES PLOTS XG BOOST ##
 ##############################
 df6 <- read.csv(file.path(folder, '..', 'results', 'final',
-                         'zimbabwe_validation',  'comparison_per_time.csv')) %>% 
+          'ZMB_validation',  'xgboost_comparative', 'comparison_per_time.csv')) %>% 
   arrange(year, month_num) %>% 
   mutate(time_step = row_number() - 1)
 
@@ -312,7 +312,7 @@ temp_pred <- ggplot(df_long6, aes(x = time_step, y = mean_mri,
     values = c("Observed" = 0.8, "Baseline" = 0.6, "Fine-tuned" = 0.6)) +
   scale_x_continuous(breaks = seq(0, max(df6$time_step), by = 5)) +
   labs(title = "(B) Temporal Trend Comparison",
-       subtitle = "Mean predicted MRI across test locations by time step for Zimbabwe \n(2020–2022)",
+       subtitle = "Mean predicted MRI across test locations by time step for Zambia \n(2007-2024)",
     x = "Time step", y = "Mean MRI") + theme_minimal() +
   theme(legend.position = 'bottom',
         plot.title = element_text(size = 11, face = "bold"),
@@ -333,7 +333,7 @@ temp_pred <- ggplot(df_long6, aes(x = time_step, y = mean_mri,
 ## 7. ERROR PLOTS XG BOOST ##
 #############################
 df5 <- read.csv(file.path(folder, '..', 'results', 'final',
-      'zimbabwe_validation',  'lstm_comparative', 'comparison_per_location.csv'))
+      'ZMB_validation',  'lstm_comparative', 'comparison_per_location.csv'))
 
 strategies <- list(list(label = "Baseline", obs = "observed_baseline", 
   pred = "predicted_baseline", r2 = "R2_baseline", rmse = "RMSE_baseline"),
@@ -371,7 +371,7 @@ lstm_res_plot <- ggplot(df_long5, aes(x = observed, y = predicted, colour = appr
   scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
   facet_wrap(~ approach, ncol = 5) +
   labs(title = "(C) LSTM Model", 
-       subtitle = "MRI modified LSTM prediction results for 2020-2022 test period (Zimbabwe)", 
+       subtitle = "MRI modified LSTM prediction results for 2024 test period (Zambia)", 
     x = "Observed MRI", y = "Predicted MRI") +
   theme_bw(base_size = 12) +
   theme(legend.position = 'bottom',
@@ -392,7 +392,7 @@ combined_plots_1 <- ggarrange(top_row, lstm_res_plot,
                             ncol = 1, nrow = 2,
                             heights = c(0.9, 0.7))
 
-path = file.path(folder, 'figures', 'training_plots_1.png')
+path = file.path(folder, 'figures', '2_training_plots_1.png')
 png(path, units="in", width=9, height=6.5, res=300)
 print(combined_plots_1)
 dev.off()

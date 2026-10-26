@@ -20,15 +20,6 @@ federated_results <- read.csv(file.path(folder, '..', 'results', 'final',
 shapely_df <- read.csv(file.path(folder, '..', 'results', 'final',
                                  'federated', 'shapley.csv'))
 
-uga <- read.csv(file.path(folder, '..', 'results', 'final',
-                                 'mri', 'malaria_risk_index.csv'))
-
-zwe <- read.csv(file.path(folder, '..', 'results', 'final',
-                          'mri', 'zimbabwe', 'ZWE_malaria_risk_index_yearly.csv'))
-
-zmb <- read.csv(file.path(folder, '..', 'results', 'final',
-                          'mri', 'ZMB_malaria_risk_index.csv'))
-
 federated_results$client = factor(
   federated_results$client,
   levels = c('uganda', 'zimbabwe', 'zambia'),
@@ -99,7 +90,7 @@ sovereignty <- ggplot(panel_b_df, aes(x = client, y = delta_sov_mean, fill = cli
        subtitle = "The cost of not sharing healthcare training\ndata with partners",
        x = NULL,
        y = expression("Sovereignty Cost " (Delta[sov]))) +
-  theme_minimal() + scale_y_continuous(limits = c(-0.05, 0.25)) +
+  theme_minimal() + scale_y_continuous(limits = c(-0.13, 0.25)) +
   theme(legend.position = 'none',
         plot.title = element_text(size = 10, face = "bold"),
         plot.subtitle = element_text(size = 8),
@@ -128,7 +119,7 @@ federation_gain <- ggplot(panel_c_df, aes(x = client, y = gamma_mean,
                 vjust = ifelse(gamma_mean >= 0, -0.5, 1.3)),
             size = 2.5) +
   scale_fill_viridis_d(option = "viridis") +
-  scale_y_continuous(limits = c(-0.53, 0.06)) +
+  scale_y_continuous(limits = c(-0.53, 0.86)) +
   scale_x_discrete(labels = tools::toTitleCase) +
   labs(title = "(C) Federation Gain",
        subtitle = "The cost of sharing training data with partner\ncountries.",
@@ -215,7 +206,7 @@ model_regimes <- ggplot(agg, aes(x = regime_label, y = mean_r2, fill = client)) 
                 vjust = if_else(mean_r2 >= 0, -0.5, 1.3)),
             position = position_dodge(0.75), size = 2) +
   scale_fill_viridis_d(option = "viridis") +
-  scale_y_continuous(limits = c(-0.05, 1.10)) +
+  scale_y_continuous(limits = c(-0.85, 1.10)) +
   labs(title = "(A) Model Performance",
        subtitle = paste0("Model performance across different data sovereignty regimes."),
        x = NULL, y = expression(R^2), fill = NULL) +
@@ -380,7 +371,7 @@ all <- ggarrange(model_regimes, bottom_row,
                  nrow = 2,font.label = list(size = 9))
 
 dir.create(file.path(folder, 'figures'), showWarnings = FALSE)
-path = file.path(folder, 'figures', 'costs.png')
+path = file.path(folder, 'figures', '4_costs.png')
 png(path, units = "in", width = 8.5, height = 3, res = 480)
 print(costs)
 dev.off()
@@ -394,9 +385,18 @@ dev.off()
 ################
 ##### MAPS #####
 ################
-uga <- uga[uga$year == 2020, ]
-zwe <- zwe[zwe$year == 2020, ]
-zmb <- zmb[zmb$year == 2020, ]
+uga <- read.csv(file.path(folder, '..', 'results', 'processed',
+                          'UGA_dhs', 'file4_UGA_malaria_risk_index.csv'))
+
+zwe <- read.csv(file.path(folder, '..', 'results', 'processed',
+                          'ZWE_dhs', 'file4_ZWE_malaria_risk_index.csv'))
+
+zmb <- read.csv(file.path(folder, '..', 'results', 'processed',
+                          'ZMB_dhs', 'file4_ZMB_malaria_risk_index.csv'))
+
+uga <- uga[uga$survey_round == "2024-25", ]
+zwe <- zwe[zwe$survey_round == 2015, ]
+zmb <- zmb[zmb$survey_round == 2024, ]
 national_shp_uga <- st_read(file.path(folder, '..', 'data', 'raw', 'shapefiles',
                                       'uga.shp'))
 ug_data <- st_read(file.path(folder, '..', 'data', 'raw', 'shapefiles',
@@ -413,21 +413,21 @@ zmb_data <- st_read(file.path(folder, '..', 'data', 'raw', 'shapefiles',
 ################
 #### Uganda ####
 ################
-uga_sf <- st_as_sf(uga, coords = c("longitude", "latitude"), crs = 4326)
+uga_sf <- st_as_sf(uga, coords = c("LONGNUM", "LATNUM"), crs = 4326)
 ug_data <- st_transform(ug_data, st_crs(uga_sf))
 joined <- st_join(uga_sf, ug_data, join = st_within)
 
 mri_summary <- joined %>%
   st_drop_geometry() %>%
   group_by(GID_2) %>%             
-  summarise(mri_value = mean(mri_value, na.rm = TRUE))
+  summarise(malaria_risk_score = mean(malaria_risk_score, na.rm = TRUE))
 
 ug_data_mri <- ug_data %>%
   left_join(mri_summary, by = "GID_2")
 
 uganda_mri <- ggplot() + 
   geom_sf(data = national_shp_uga, fill = NA, color = "black", linewidth = 0.3) +
-  geom_sf(data = ug_data_mri, aes(fill = mri_value), color = NA) +
+  geom_sf(data = ug_data_mri, aes(fill = malaria_risk_score), color = NA) +
   labs(title    = "Derived 2020 Malaria Risk Index (MRI).",
        subtitle = "(A) Uganda") +
   scale_fill_viridis_c(name = "MRI", option = "viridis") +
@@ -452,21 +452,21 @@ uganda_mri <- ggplot() +
 ##################
 #### Zimbabwe ####
 ##################
-zwe_sf <- st_as_sf(zwe, coords = c("longitude", "latitude"), crs = 4326)
+zwe_sf <- st_as_sf(zwe, coords = c("LONGNUM", "LATNUM"), crs = 4326)
 zwe_data <- st_transform(zwe_data, st_crs(zwe_sf))
 zwe_joined <- st_join(zwe_sf, zwe_data, join = st_within)
 
 zwe_mri_summary <- zwe_joined %>%
   st_drop_geometry() %>%
   group_by(GID_2) %>%             
-  summarise(mri_value = mean(mri_value, na.rm = TRUE))
+  summarise(malaria_risk_score = mean(malaria_risk_score, na.rm = TRUE))
 
 zwe_data_mri <- zwe_data %>%
   left_join(zwe_mri_summary, by = "GID_2")
 
 zimbabwe_mri <- ggplot() + 
   geom_sf(data = national_shp_zwe, fill = NA, color = "black", linewidth = 0.3) +
-  geom_sf(data = zwe_data_mri, aes(fill = mri_value), color = NA) +
+  geom_sf(data = zwe_data_mri, aes(fill = malaria_risk_score), color = NA) +
   labs(title    = " ",
        subtitle = "(B) Zimbabwe") +
   scale_fill_viridis_c(name = "MRI", option = "viridis") +
@@ -491,21 +491,21 @@ zimbabwe_mri <- ggplot() +
 ################
 #### Zambia ####
 ################
-zmb_sf <- st_as_sf(zmb, coords = c("longitude", "latitude"), crs = 4326)
+zmb_sf <- st_as_sf(zmb, coords = c("LONGNUM", "LATNUM"), crs = 4326)
 zmb_data <- st_transform(zmb_data, st_crs(zmb_sf))
 zmb_joined <- st_join(zmb_sf, zmb_data, join = st_within)
 
 zmb_mri_summary <- zmb_joined %>%
   st_drop_geometry() %>%
   group_by(GID_2) %>%             
-  summarise(mri_value = mean(mri_value, na.rm = TRUE))
+  summarise(malaria_risk_score = mean(malaria_risk_score, na.rm = TRUE))
 
 zmb_data_mri <- zmb_data %>%
   left_join(zmb_mri_summary, by = "GID_2")
 
 zambia_mri <- ggplot() + 
   geom_sf(data = national_shp_zmb, fill = NA, color = "black", linewidth = 0.3) +
-  geom_sf(data = zmb_data_mri, aes(fill = mri_value), color = NA) +
+  geom_sf(data = zmb_data_mri, aes(fill = malaria_risk_score), color = NA) +
   labs(title    = " ",
        subtitle = "(C) Zambia") +
   scale_fill_viridis_c(name = "MRI", option = "viridis") +
