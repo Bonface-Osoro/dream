@@ -45,6 +45,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 
+from dream.lstm import lstm_load_and_prepare
+
 pd.options.mode.chained_assignment = None
 warnings.filterwarnings('ignore')
 
@@ -71,16 +73,22 @@ if __name__ == '__main__':
 
 # ── Participants ────────────────────────────────────────────────────────────
 # Ordered along the climatic gradient: equatorial -> tropical -> subtropical
+#
+# Each location is surveyed in ONE round only and holds the 12 months of that
+# survey year, so a split by year is also a split by location: no location is
+# shared between train, val and test. The "years" below are therefore survey
+# rounds. Time order is kept: the earliest rounds train, the next one
+# validates, and the latest is held out for testing.
 CLIENTS = {
-    'uganda':   {'path': os.path.join(DATA_RESULTS, 'mri',
-                                      'malaria_risk_index_monthly.csv'),
-                 'train': (2010, 2017), 'val': (2018, 2018), 'test': (2019, 2020)},
-    'zambia':   {'path': os.path.join(DATA_RESULTS, 'mri', 'zambia',
-                                      'ZMB_malaria_risk_index_monthly.csv'),
-                 'train': (2010, 2017), 'val': (2020, 2020), 'test': (2021, 2022)},
-    'zimbabwe': {'path': os.path.join(DATA_RESULTS, 'mri', 'zimbabwe',
-                                      'ZWE_malaria_risk_index_monthly.csv'),
-                 'train': (2015, 2017), 'val': (2018, 2019), 'test': (2020, 2024)},
+    'uganda':   {'path': os.path.join(DATA_PROCESSED, 'UGA_dhs',
+                                      'file7_UGA_malaria_monthly_risk_covariates.csv'),
+                 'train': (2009, 2014), 'val': (2018, 2018), 'test': (2024, 2024)},
+    'zambia':   {'path': os.path.join(DATA_PROCESSED, 'ZMB_dhs',
+                                      'file7_ZMB_malaria_monthly_risk_covariates.csv'),
+                 'train': (2007, 2013), 'val': (2018, 2018), 'test': (2024, 2024)},
+    'zimbabwe': {'path': os.path.join(DATA_PROCESSED, 'ZWE_dhs',
+                                      'file7_ZWE_malaria_monthly_risk_covariates.csv'),
+                 'train': (2005, 2005), 'val': (2010, 2010), 'test': (2015, 2015)},
 }
 
 # Countries tested as a transfer SOURCE, in turn, in __main__. Each
@@ -96,9 +104,12 @@ FEATURES = ['ndvi', 'precipitation_mm', 'temperature_C', 'elevation_m',
 TARGET   = 'monthly_mri'
 
 INPUT_SIZE, HIDDEN_SIZE, NUM_LAYERS = 7, 32, 1
-LOOK_BACK, HORIZON = 12, 6
+# A location has 12 months in its survey year and loses January to the lag,
+# leaving 11 consecutive months, so LOOK_BACK + HORIZON must be <= 11. With
+# 6 + 3 each location yields 3 windows (targets in Oct, Nov, Dec).
+LOOK_BACK, HORIZON = 6, 3
 
-STRIDE = 3
+STRIDE = 1
 
 N_ROUNDS, LOCAL_EPOCHS, LOCAL_LR, BATCH = 60, 2, 0.001, 256
 
@@ -134,11 +145,13 @@ class MRILSTM(nn.Module):
 def load_country(path):
 
     """
-    This function loads a country-level dataset from a CSV file,
-    creates cyclical month features using sine and cosine
-    transformations, generates a one-month lag of the target variable
-    for each spatial location, removes rows with missing values, and
-    returns the processed DataFrame.
+    This function loads a country-level dataset from a CSV file using
+    the same preparation as the standalone LSTM (lstm_load_and_prepare):
+    the child-level rows are reduced to one row per location, year and
+    month (mean risk of the children at that location), cyclical month
+    features (`month_sin` and `month_cos`) are added, a one-month lag of
+    the target (`mri_lag1`) is built within each location and year, and
+    rows with missing values (January, which has no lag) are removed.
 
     Parameters
     ----------
@@ -148,19 +161,11 @@ def load_country(path):
     Returns
     -------
     df : pandas.DataFrame
-        Processed DataFrame containing the original variables,
-        cyclical month features (`month_sin` and `month_cos`),
-        the lagged target variable (`mri_lag1`), and only complete
-        observations.
+        One row per location and month, with `month_sin`, `month_cos`,
+        `mri_lag1` and only complete observations.
     """
 
-    df = pd.read_csv(path)
-    df['month_sin'] = np.sin(2 * np.pi * df['month_num'] / 12)
-    df['month_cos'] = np.cos(2 * np.pi * df['month_num'] / 12)
-    df['mri_lag1']  = df.groupby(['longitude', 'latitude'])[TARGET].shift(1)
-    df = df.dropna().reset_index(drop = True)
-
-    return df
+    return lstm_load_and_prepare(path)
 
 
 def make_sequences(df):
@@ -199,21 +204,28 @@ def make_sequences(df):
     target_year : numpy.ndarray
         One-dimensional array containing the calendar year of each
         target value, used for date-based train/val/test splitting.
+
+    target_month : numpy.ndarray
+        One-dimensional array containing the calendar month (1-12) of
+        each target value.
     """
 
-    X, y, target_year = [], [], []
+    X, y, target_year, target_month = [], [], [], []
     for _, g in df.sort_values(['year', 'month_num']
                                ).groupby(['longitude', 'latitude']):
 
         g = g.sort_values(['year', 'month_num'])
         d, t, yrs = g[FEATURES].values, g[TARGET].values, g['year'].values
+        mons = g['month_num'].values
         for i in range(0, len(g) - LOOK_BACK - HORIZON + 1, STRIDE):
 
             X.append(d[i:i + LOOK_BACK])
             y.append(t[i + LOOK_BACK + HORIZON - 1])
             target_year.append(yrs[i + LOOK_BACK + HORIZON - 1])
+            target_month.append(mons[i + LOOK_BACK + HORIZON - 1])
 
-    return np.array(X), np.array(y), np.array(target_year)
+    return (np.array(X), np.array(y), np.array(target_year),
+            np.array(target_month))
 
 
 def build_clients():
@@ -257,7 +269,7 @@ def build_clients():
         xs.fit(df.loc[train_mask, FEATURES])
         df[FEATURES] = xs.transform(df[FEATURES])
 
-        X_all, y_all, target_year = make_sequences(df)
+        X_all, y_all, target_year, target_month = make_sequences(df)
 
         loaders, raw = {}, {}
         for s in ('train', 'val', 'test'):
@@ -283,9 +295,14 @@ def build_clients():
 
         df_test = df[(df['year'] >= cfg['test'][0]) & (df['year'] <= cfg['test'][1])]
 
+        # Months the models are scored on (the targets of the test windows),
+        # so the climatology floor is scored on the same rows.
+        test_mask = (target_year >= cfg['test'][0]) & (target_year <= cfg['test'][1])
+        test_months = sorted(set(target_month[test_mask].tolist()))
+
         clients[name] = {'loaders': loaders, 'raw': raw, 'y_scaler': ys,
                          'n_train': len(raw['train'][0]),
-                         'df_test': df_test}
+                         'df_test': df_test, 'test_months': test_months}
         print(f'{name:9s} train={clients[name]["n_train"]:>7d}')
 
 
@@ -704,8 +721,8 @@ def federate(clients, members, mu=0.0, weighting='sample',
 def climatology(clients):
     """
     This function evaluates a climatology baseline for each client by
-    predicting the mean target value for each spatial location and
-    calendar month using the training data.
+    predicting the country-wide mean target value for each calendar
+    month using the training data.
 
     Parameters
     ----------
@@ -725,10 +742,14 @@ def climatology(clients):
         df_tr = load_country(CLIENTS[name]['path'])
         tr = df_tr[(df_tr['year'] >= CLIENTS[name]['train'][0]) &
                    (df_tr['year'] <= CLIENTS[name]['train'][1])]
-        clim = tr.groupby(['longitude', 'latitude', 'month_num'])[TARGET] \
-                 .mean().rename('clim').reset_index()
-        te = c['df_test'].merge(clim, on = ['longitude', 'latitude', 'month_num'],
-                                how = 'left')
+
+        # Locations are surveyed in one round only, so no test location
+        # appears in training: the seasonal mean is taken across the
+        # country by calendar month, and scored on the same months the
+        # models predict.
+        clim = tr.groupby('month_num')[TARGET].mean().rename('clim').reset_index()
+        te = c['df_test'][c['df_test']['month_num'].isin(c['test_months'])]
+        te = te.merge(clim, on = 'month_num', how = 'left')
         te['clim'] = te['clim'].fillna(tr[TARGET].mean())
         rows.append({'regime': 'climatology', 'client': name,
                      'R2':   r2_score(te[TARGET], te['clim']),

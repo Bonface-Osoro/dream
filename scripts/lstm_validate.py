@@ -51,18 +51,18 @@ DATA_PROCESSED = os.path.join(BASE_PATH, '..', 'results', 'processed')
 log = logging.getLogger(__name__)
 
 MODEL_PATH     = os.path.join(DATA_RESULTS, 'lstm', 'UGA_dhs', 'best_lstm_model.pt')
-TEST_DATA_PATH = os.path.join(DATA_PROCESSED, 'ZWE_dhs', 'file7_ZWE_malaria_monthly_risk_covariates.csv')
+TEST_DATA_PATH = os.path.join(DATA_PROCESSED, 'ZMB_dhs', 'file7_ZMB_malaria_monthly_risk_covariates.csv')
 TARGET_COLUMN  = 'monthly_mri'
-OUTPUT_DIR     = os.path.join(DATA_RESULTS, 'ZWE_validation', 'lstm_comparative')
+OUTPUT_DIR     = os.path.join(DATA_RESULTS, 'ZMB_validation', 'lstm_comparative')
 os.makedirs(OUTPUT_DIR, exist_ok = True)
 
 # Data split by survey round. Each location is surveyed in one round only,
 # so a split by year is also a split by location: nothing is shared.
 # Time order is kept: the earliest round fine-tunes, the next one
 # validates, and the latest is held out for testing.
-FINETUNE_YEARS = [2005]
-VAL_YEARS      = [2010]
-TEST_YEARS     = [2015]
+FINETUNE_YEARS = [2007,2013]
+VAL_YEARS      = [2018]
+TEST_YEARS     = [2024]
 
 INPUT_SIZE  = 7    
 HIDDEN_SIZE = 64

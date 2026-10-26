@@ -61,18 +61,18 @@ DATA_RESULTS = os.path.join(BASE_PATH, '..', 'results', 'final')
 log = logging.getLogger(__name__)
 
 MODEL_PATH     = os.path.join(DATA_RESULTS, 'xgboost', 'UGA_dhs', 'xgb_model.pkl')
-TEST_DATA_PATH = os.path.join(DATA_PROCESSED, 'ZWE_dhs', 'file7_ZWE_malaria_monthly_risk_covariates.csv')
+TEST_DATA_PATH = os.path.join(DATA_PROCESSED, 'ZMB_dhs', 'file7_ZMB_malaria_monthly_risk_covariates.csv')
 TARGET_COLUMN  = 'monthly_mri'
-OUTPUT_DIR     = os.path.join(DATA_RESULTS, 'ZWE_validation', 'xgboost_comparative')
+OUTPUT_DIR     = os.path.join(DATA_RESULTS, 'ZMB_validation', 'xgboost_comparative')
 os.makedirs(OUTPUT_DIR, exist_ok = True)
 
 # Data split by survey round. Each location is surveyed in one round only,
 # so a split by year is also a split by location: nothing is shared.
 # Time order is kept: the earliest round trains the residual booster, the
 # next one selects the number of trees, and the latest is held out.
-FINETUNE_YEARS = [2005]   # used to train the residual booster
-VAL_YEARS      = [2010]   # used to select best n_trees (no data leakage)
-TEST_YEARS     = [2015]   # held-out, never touched during fine-tuning
+FINETUNE_YEARS = [2007,2013]   # used to train the residual booster
+VAL_YEARS      = [2018]   # used to select best n_trees (no data leakage)
+TEST_YEARS     = [2024]   # held-out, never touched during fine-tuning
 
 # Residual booster hyperparameters
 BOOSTER_LEARNING_RATE = 0.01
