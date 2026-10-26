@@ -1,4 +1,9 @@
 # Digital Resilience Ecosystem for Adaptive Malaria Control (dream)
+
+[![tests](https://github.com/Bonface-Osoro/dream/actions/workflows/tests.yml/badge.svg)](https://github.com/Bonface-Osoro/dream/actions/workflows/tests.yml)
+[![codecov](https://codecov.io/gh/Bonface-Osoro/dream/branch/main/graph/badge.svg)](https://codecov.io/gh/Bonface-Osoro/dream)
+![License](https://img.shields.io/github/license/Bonface-Osoro/dream)
+
 Climate change is fundamentally altering malaria transmission dynamics in ways that traditional surveillance systems are not equipped to detect. Recent resurgence patterns in East Africa show that even where core interventions remain in place, ecological shifts such as changes in dominant mosquito vector species can rapidly create new transmission regimes. As warming temperatures expand malaria suitability into highland and previously low-risk areas, outbreaks increasingly occur in immunologically naïve populations. Because most forecasting models rely on historical data, they struggle to anticipate these novel conditions, leaving health systems in a reactive cycle of rising cases followed by emergency response.
 
 Here, we develop a climate-adaptive malaria early response framework designed to close that “prevention gap”, (the lag between environmental change and public health action). By integrating ecological intelligence, climate data, AI-driven prediction, and predefined response triggers, we convert emerging risk signals into anticipatory intervention. Built for operational use rather than academic modeling alone, the framework also generates decision-ready economic evidence, including cost per case and cost per DALY averted, aligned with Global Fund and PMI investment criteria. The goal is to enable scalable, climate-resilient malaria control across highland East Africa and beyond.
@@ -196,11 +201,6 @@ Open each script in RStudio and source it. Figures are written to `vis/figures/`
 | 7 | `vis/uga_mri_timelapse.R` | Uganda monthly index | `UGA_mri_timelapse.gif` |
 
 `vis/3_paper_training.R` is an earlier version of `vis/3_training.R`.
-
-### Scripts that are not part of the main pipeline
-
-- `scripts/zambia_malaria_rates.py` merges gridded malaria indicators (parasite rate, incidence, mortality, net access and use) for Zambia into one table, to compare with the index. It needs the exported indicator tables in `results/processed/zambia/malaria_indices/`.
-- `scripts/combineAll.py` imports `dream.pre_geo`, which is not in `src/dream/`. Do not run it until that module is restored.
 
 ## Background and funding
 

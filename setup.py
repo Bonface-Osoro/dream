@@ -49,6 +49,20 @@ setup(
     ],
     install_requires=[
         'numpy>=1.16.4',
+        'pandas',
+        'scipy',
+        'scikit-learn',
+        'geopandas',
+        'pymc',
+        'arviz',
+        'nutpie',
+        'torch',
+        'xgboost',
+        'shap',
+        'joblib',
+        'matplotlib',
+        'tqdm',
+        'openpyxl',
     ],
     entry_points={
         'console_scripts': [
